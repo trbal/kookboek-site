@@ -729,6 +729,21 @@ button { cursor: pointer; }
 }
 
 .confirm-actions { display: flex; gap: 10px; margin-top: 18px; justify-content: flex-end; }
+
+/* ---- Smartphone: bovenbalk en tabs passen op het scherm ---- */
+@media (max-width: 880px) {
+  html, body { overflow-x: hidden; }
+  .topbar { position: static; }
+  .topbar-inner { flex-wrap: wrap; padding: 10px 14px; gap: 8px 10px; }
+  .brand-name { font-size: 18px; }
+  .searchbox { order: 3; flex: 1 1 100%; max-width: none; }
+  .topbar-actions { flex-shrink: 1; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; min-width: 0; }
+  .topbar-actions .btn { padding-left: 10px; padding-right: 10px; font-size: 13px; }
+  .topbar-actions span { display: none; }
+  .topbar-inner > .tab-row { flex: 1 1 100%; min-width: 0; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .topbar-inner > .tab-row::-webkit-scrollbar { display: none; }
+  .tab-btn { flex: 0 0 auto; white-space: nowrap; margin-right: 14px; }
+}
 </style>
 </head>
 <body>
@@ -1283,10 +1298,17 @@ window.ICONS = {
   }
   function attachPendingHandlers(){
     document.getElementById("pending-logout").addEventListener("click", () => logout());
-    document.getElementById("pending-recheck").addEventListener("click", async () => {
+    const recheck = async () => {
       await loadRole();
       if (state.role) await loadAll(); else render();
-    });
+    };
+    document.getElementById("pending-recheck").addEventListener("click", recheck);
+    // Automatisch opnieuw controleren zolang dit scherm open staat.
+    clearInterval(window._pendingTimer);
+    window._pendingTimer = setInterval(() => {
+      if (!document.getElementById("pending-recheck")) { clearInterval(window._pendingTimer); return; }
+      recheck();
+    }, 30000);
   }
 
   // Rollen in de interface: knoppen verbergen die de rol toch niet mag gebruiken (de database blokkeert het hoe dan ook).
