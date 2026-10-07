@@ -1132,7 +1132,7 @@ window.ICONS = {
 
   // Stil verversen (bv. als je terugkeert naar het tabblad): enkel renderen als er iets veranderd is.
   async function refreshQuietly(){
-    if (!state.session || state.loading) return;
+    if (!state.session || !state.role || state.loading) return;
     try {
       let changed = false;
       for (const [name, set] of COLLECTIONS){
@@ -1150,6 +1150,7 @@ window.ICONS = {
   async function loadRecipes(){ await loadAll(); }
 
   async function saveToCollection(collectionName, item){
+    if (!canWrite()) throw new Error("Je hebt geen schrijfrechten (rol: " + (state.role || "geen") + ")");
     const { error } = await sb.from(collectionName).upsert(toRow(collectionName, item), { onConflict: "id" });
     if (error) throw new Error(error.message);
     const list = cache[collectionName] || (cache[collectionName] = []);
@@ -1160,6 +1161,7 @@ window.ICONS = {
     render();
   }
   async function deleteFromCollection(collectionName, id){
+    if (!canDelete()) throw new Error("Enkel een admin mag verwijderen (jouw rol: " + (state.role || "geen") + ")");
     const { error, count } = await sb.from(collectionName).delete({ count: "exact" }).eq("id", id);
     if (error) throw new Error(error.message);
     if (count === 0) throw new Error("Niet verwijderd (geen rechten, of bestond al niet meer)");
@@ -1168,39 +1170,80 @@ window.ICONS = {
     render();
   }
 
-  // ---------- Login ----------
+  // ---------- Login / registratie / rollen ----------
+  const ROLLEN = { viewer: "Viewer (lezen)", contributor: "Contributor (lezen + toevoegen/wijzigen)", admin: "Admin (alles + beheer)" };
+  function canWrite(){ return state.role === "contributor" || state.role === "admin"; }
+  function canDelete(){ return state.role === "admin"; }
+
+  const INPUT_STYLE = "padding:11px 12px; border:1px solid var(--line-strong); border-radius:8px; font:inherit;";
   function renderLogin(){
+    const aanvragen = state.loginMode === "aanvragen";
     return `
     <div style="min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;">
       <form id="login-form" style="background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:32px 28px; width:100%; max-width:360px; display:flex; flex-direction:column; gap:14px;">
         <div class="brand" style="justify-content:center; margin-bottom:6px;"><span class="brand-mark">🫒</span><span class="brand-name">Kookboek</span></div>
-        <input id="login-email" type="email" placeholder="E-mailadres" autocomplete="username" required style="padding:11px 12px; border:1px solid var(--line-strong); border-radius:8px; font:inherit;">
-        <input id="login-password" type="password" placeholder="Wachtwoord" autocomplete="current-password" required style="padding:11px 12px; border:1px solid var(--line-strong); border-radius:8px; font:inherit;">
+        <div style="text-align:center; font-weight:600;">${aanvragen ? "Account aanvragen" : "Inloggen"}</div>
+        <input id="login-email" type="email" placeholder="E-mailadres" autocomplete="username" required style="${INPUT_STYLE}">
+        <input id="login-password" type="password" placeholder="Wachtwoord${aanvragen ? " (minstens 8 tekens)" : ""}" autocomplete="${aanvragen ? "new-password" : "current-password"}" required minlength="${aanvragen ? 8 : 1}" style="${INPUT_STYLE}">
+        ${aanvragen ? `<input id="login-password2" type="password" placeholder="Herhaal wachtwoord" autocomplete="new-password" required style="${INPUT_STYLE}">` : ""}
         <div id="login-error" style="color:var(--danger); font-size:13px; min-height:18px;">${esc(state.loginError || "")}</div>
-        <button class="btn btn-primary" type="submit" id="login-btn" style="justify-content:center;">Inloggen</button>
+        ${state.loginInfo ? `<div style="font-size:13px; line-height:1.45; background:var(--bg-soft, #f3f1ea); border-radius:8px; padding:10px 12px;">${esc(state.loginInfo)}</div>` : ""}
+        <button class="btn btn-primary" type="submit" id="login-btn" style="justify-content:center;">${aanvragen ? "Account aanvragen" : "Inloggen"}</button>
+        <button class="btn btn-sm" type="button" id="login-switch" style="justify-content:center;">${aanvragen ? "Ik heb al een account" : "Nog geen account? Aanvragen"}</button>
       </form>
     </div>`;
   }
   function attachLoginHandlers(){
     const form = document.getElementById("login-form");
     if (!form) return;
+    document.getElementById("login-switch").addEventListener("click", () => {
+      state.loginMode = state.loginMode === "aanvragen" ? "login" : "aanvragen";
+      state.loginError = null; state.loginInfo = null;
+      render();
+    });
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = document.getElementById("login-btn");
+      const email = document.getElementById("login-email").value.trim();
+      const password = document.getElementById("login-password").value;
       btn.disabled = true; btn.textContent = "Bezig...";
-      const { data, error } = await sb.auth.signInWithPassword({
-        email: document.getElementById("login-email").value.trim(),
-        password: document.getElementById("login-password").value
-      });
-      if (error){
-        state.loginError = "Inloggen mislukt: " + error.message;
+      if (state.loginMode === "aanvragen"){
+        if (password !== document.getElementById("login-password2").value){
+          state.loginError = "De twee wachtwoorden zijn niet gelijk."; state.loginInfo = null; render(); return;
+        }
+        const { error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
+        if (error){ state.loginError = "Aanvraag mislukt: " + error.message; state.loginInfo = null; render(); return; }
+        state.loginError = null;
+        state.loginInfo = "Bijna klaar. We stuurden een bevestigingsmail naar " + email + ". Klik op de link in die mail (kijk ook in je spam). Daarna beoordeelt de beheerder je aanvraag.";
+        state.loginMode = "login";
         render();
         return;
       }
-      state.loginError = null;
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
+      if (error){
+        state.loginError = "Inloggen mislukt: " + error.message; state.loginInfo = null;
+        render();
+        return;
+      }
+      state.loginError = null; state.loginInfo = null;
       state.session = data.session;
-      loadAll();
+      startApp();
     });
+  }
+
+  async function loadRole(){
+    const uid = state.session && state.session.user && state.session.user.id;
+    if (!uid){ state.role = null; state.roleLoaded = true; return; }
+    const { data, error } = await sb.from("app_users").select("role").eq("user_id", uid).maybeSingle();
+    state.role = (!error && data) ? data.role : null;
+    state.roleError = error ? error.message : null;
+    state.roleLoaded = true;
+  }
+  async function startApp(){
+    if (state.started) return;
+    state.started = true;
+    await loadRole();
+    if (state.role) await loadAll(); else render();
   }
   async function initAuth(){
     const { data } = await sb.auth.getSession();
@@ -1209,15 +1252,130 @@ window.ICONS = {
     sb.auth.onAuthStateChange((_event, session) => {
       const had = !!state.session;
       state.session = session;
-      if (had && !session) render();
+      if (had && !session){
+        state.role = null; state.roleLoaded = false; state.started = false;
+        render();
+      } else if (!had && session && !state.started){
+        setTimeout(startApp, 0);
+      }
     });
-    if (state.session) loadAll(); else render();
+    if (state.session) startApp(); else render();
   }
   async function logout(){
     await sb.auth.signOut();
-    state.session = null;
+    state.session = null; state.role = null; state.roleLoaded = false; state.started = false;
     Object.keys(cache).forEach(k => delete cache[k]);
     render();
+  }
+
+  function renderPending(){
+    return `
+    <div style="min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;">
+      <div style="background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:32px 28px; width:100%; max-width:400px; display:flex; flex-direction:column; gap:14px;">
+        <div class="brand" style="justify-content:center;"><span class="brand-mark">🫒</span><span class="brand-name">Kookboek</span></div>
+        <div style="text-align:center; font-weight:600;">Wacht op goedkeuring</div>
+        <p style="font-size:14px; line-height:1.5; margin:0;">Je bent ingelogd als <b>${esc((state.session && state.session.user && state.session.user.email) || "")}</b>, maar de beheerder heeft je nog geen toegang gegeven. Kom later terug of vraag het hem even.</p>
+        ${state.roleError ? `<div style="color:var(--danger); font-size:13px;">${esc(state.roleError)}</div>` : ""}
+        <button class="btn btn-primary" id="pending-recheck" style="justify-content:center;">Opnieuw controleren</button>
+        <button class="btn btn-sm" id="pending-logout" style="justify-content:center;">Uitloggen</button>
+      </div>
+    </div>`;
+  }
+  function attachPendingHandlers(){
+    document.getElementById("pending-logout").addEventListener("click", () => logout());
+    document.getElementById("pending-recheck").addEventListener("click", async () => {
+      await loadRole();
+      if (state.role) await loadAll(); else render();
+    });
+  }
+
+  // Rollen in de interface: knoppen verbergen die de rol toch niet mag gebruiken (de database blokkeert het hoe dan ook).
+  function applyRoleUI(){
+    if (!canWrite()) document.querySelectorAll('[id^="add-"][id$="-btn"], #empty-add-btn').forEach(el => { el.style.display = "none"; });
+    if (!canDelete()) document.querySelectorAll('[id^="delete-"][id$="-btn"]').forEach(el => { el.style.display = "none"; });
+  }
+
+  // ---------- Beheer (admin): aanvragen goedkeuren, rollen wijzigen ----------
+  function beheerFout(err){
+    const m = (err && err.message) || String(err);
+    if (m.indexOf("laatste_admin") >= 0) return "Er moet minstens één admin overblijven.";
+    if (m.indexOf("geen_rechten") >= 0) return "Je hebt hier geen rechten voor.";
+    if (m.indexOf("heeft_al_een_rol") >= 0) return "Deze persoon heeft al een rol.";
+    return m;
+  }
+  async function openBeheer(){
+    const scrim = document.createElement("div");
+    scrim.className = "modal-scrim open";
+    scrim.style.zIndex = "250";
+    document.body.appendChild(scrim);
+    const me = state.session.user.id;
+    const fmt = (d) => d ? new Date(d).toLocaleDateString("nl-BE") : "-";
+    const rolSelect = (id, cur, extra) => `<select data-rol-for="${esc(id)}" ${extra || ""} style="padding:6px 8px; border:1px solid var(--line-strong); border-radius:6px; font:inherit;">${Object.keys(ROLLEN).map(r => `<option value="${r}" ${r === cur ? "selected" : ""}>${esc(ROLLEN[r])}</option>`).join("")}</select>`;
+    function close(){ if (scrim.parentNode) scrim.parentNode.removeChild(scrim); }
+    async function refresh(msg){
+      scrim.innerHTML = `<div class="modal" style="max-width:820px;"><div style="padding:22px;">Laden...</div></div>`;
+      const [a, g] = await Promise.all([sb.rpc("admin_aanvragen"), sb.rpc("admin_gebruikers")]);
+      if (a.error || g.error){
+        scrim.innerHTML = `<div class="modal" style="max-width:520px;"><div style="padding:22px;"><p>${esc(beheerFout(a.error || g.error))}</p><div class="confirm-actions"><button class="btn btn-sm" id="beheer-close">Sluiten</button></div></div></div>`;
+        scrim.querySelector("#beheer-close").addEventListener("click", close);
+        return;
+      }
+      const aanvragen = a.data || [], gebruikers = g.data || [];
+      scrim.innerHTML = `
+      <div class="modal" style="max-width:820px; max-height:90vh; overflow:auto;">
+        <div style="padding:22px; display:flex; flex-direction:column; gap:18px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h2 style="margin:0; font-size:18px;">Beheer</h2>
+            <button class="btn btn-sm" id="beheer-close">Sluiten</button>
+          </div>
+          ${msg ? `<div style="font-size:13px; background:var(--bg-soft, #f3f1ea); border-radius:8px; padding:8px 12px;">${esc(msg)}</div>` : ""}
+          <section>
+            <h3 style="margin:0 0 8px; font-size:15px;">Aanvragen (${aanvragen.length})</h3>
+            ${aanvragen.length ? aanvragen.map(r => `
+              <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:8px 0; border-top:1px solid var(--line);">
+                <div style="flex:1; min-width:200px;"><b>${esc(r.email)}</b><div style="font-size:12px; color:var(--muted, #777);">aangevraagd op ${esc(fmt(r.aangemaakt_op))}</div></div>
+                ${rolSelect(r.user_id, "viewer")}
+                <button class="btn btn-sm btn-primary" data-act="approve" data-id="${esc(r.user_id)}">Goedkeuren</button>
+                <button class="btn btn-sm btn-danger" data-act="reject" data-id="${esc(r.user_id)}" data-mail="${esc(r.email)}">Weigeren</button>
+              </div>`).join("") : `<div style="font-size:13.5px; color:var(--muted, #777);">Geen openstaande aanvragen.</div>`}
+          </section>
+          <section>
+            <h3 style="margin:0 0 8px; font-size:15px;">Gebruikers (${gebruikers.length})</h3>
+            ${gebruikers.map(u => `
+              <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:8px 0; border-top:1px solid var(--line);">
+                <div style="flex:1; min-width:200px;"><b>${esc(u.email)}</b>${u.user_id === me ? " (jij)" : ""}<div style="font-size:12px; color:var(--muted, #777);">laatst ingelogd ${esc(fmt(u.laatst_ingelogd))}</div></div>
+                ${rolSelect(u.user_id, u.role, `data-current="${esc(u.role)}" ${u.user_id === me ? "disabled" : ""}`)}
+                <button class="btn btn-sm btn-danger" data-act="revoke" data-id="${esc(u.user_id)}" data-mail="${esc(u.email)}" ${u.user_id === me ? "disabled" : ""}>Toegang intrekken</button>
+              </div>`).join("")}
+          </section>
+        </div>
+      </div>`;
+      scrim.querySelector("#beheer-close").addEventListener("click", close);
+      const selFor = (id) => scrim.querySelector('select[data-rol-for="' + id + '"]');
+      scrim.querySelectorAll("[data-act]").forEach(btn => btn.addEventListener("click", async () => {
+        const act = btn.getAttribute("data-act"), id = btn.getAttribute("data-id"), mail = btn.getAttribute("data-mail");
+        let res, text;
+        if (act === "approve"){
+          const rol = selFor(id).value;
+          res = await sb.rpc("admin_rol_toekennen", { p_user: id, p_rol: rol });
+          text = "Toegang gegeven als " + rol;
+        } else if (act === "reject"){
+          if (!(await confirmDialog("Aanvraag van " + mail + " weigeren? Het account wordt verwijderd.", { confirmLabel: "Weigeren" }))) return;
+          res = await sb.rpc("admin_aanvraag_weigeren", { p_user: id });
+          text = "Aanvraag geweigerd";
+        } else {
+          if (!(await confirmDialog("Toegang van " + mail + " intrekken? Die persoon kan daarna niets meer zien.", { confirmLabel: "Intrekken" }))) return;
+          res = await sb.rpc("admin_rol_intrekken", { p_user: id });
+          text = "Toegang ingetrokken";
+        }
+        refresh(res.error ? beheerFout(res.error) : text);
+      }));
+      scrim.querySelectorAll("select[data-current]").forEach(sel => sel.addEventListener("change", async () => {
+        const res = await sb.rpc("admin_rol_toekennen", { p_user: sel.getAttribute("data-rol-for"), p_rol: sel.value });
+        refresh(res.error ? beheerFout(res.error) : "Rol gewijzigd");
+      }));
+    }
+    refresh();
   }
 
   // ============================================================
@@ -2242,12 +2400,22 @@ window.ICONS = {
       attachLoginHandlers();
       return;
     }
+    if (state.session && !state.roleLoaded){
+      app.innerHTML = '<div class="center-loading"><div class="loading-spinner"></div></div>';
+      return;
+    }
+    if (state.session && !state.role){
+      app.innerHTML = renderPending();
+      attachPendingHandlers();
+      return;
+    }
     if (state.loading){
       app.innerHTML = '<div class="center-loading"><div class="loading-spinner"></div></div>';
       return;
     }
     app.innerHTML = renderTopbar() + renderMain();
     attachHandlers();
+    applyRoleUI();
   }
 
   function renderTopbar(){
@@ -2273,6 +2441,8 @@ window.ICONS = {
           ${(state.activeTab === "kookboeken" && !state.activeKookboekId) ? `<button class="btn btn-primary" id="add-kookboek-btn">${ICONS.plus} Nieuw kookboek</button>` : ''}
           ${state.activeTab === "technieken" ? `<button class="btn btn-primary" id="add-techniek-btn">${ICONS.plus} Techniek/documentatie toevoegen</button>` : ''}
           ${(state.activeTab === "naslagwerken" && !state.activeNaslagwerkId) ? `<button class="btn btn-primary" id="add-naslagwerk-btn">${ICONS.plus} Nieuw naslagwerk</button>` : ''}
+          ${state.role === "admin" ? `<button class="btn btn-sm" id="beheer-btn" style="margin-left:8px;">Beheer</button>` : ''}
+          <span style="font-size:12px; color:var(--muted, #777); margin-left:8px;">${esc(state.role || "")}</span>
           <button class="btn btn-sm" id="logout-btn" title="Uitloggen" style="margin-left:8px;">Uitloggen</button>
         </div>
       </div>
@@ -5118,6 +5288,8 @@ window.ICONS = {
     if (retryBtn) retryBtn.addEventListener("click", () => loadAll());
     const logoutBtn = document.getElementById("logout-btn");
     if (logoutBtn) logoutBtn.addEventListener("click", () => logout());
+    const beheerBtn = document.getElementById("beheer-btn");
+    if (beheerBtn) beheerBtn.addEventListener("click", () => openBeheer());
     const closeAddModal = $("#close-add-modal");
     if (closeAddModal) closeAddModal.addEventListener("click", () => goTo("grid"));
     const addModalScrim = $("#add-modal-scrim");
