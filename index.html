@@ -743,6 +743,12 @@ button { cursor: pointer; }
   .topbar-inner > .tab-row { flex: 1 1 100%; min-width: 0; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
   .topbar-inner > .tab-row::-webkit-scrollbar { display: none; }
   .tab-btn { flex: 0 0 auto; white-space: nowrap; margin-right: 14px; }
+  .tab-row { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .tab-row::-webkit-scrollbar { display: none; }
+  .layout > *, .layout > div > * { min-width: 0; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); }
+  .empty-state { padding: 40px 8px; }
+  .empty-state .btn { white-space: normal; }
 }
 </style>
 </head>
@@ -3974,7 +3980,7 @@ window.ICONS = {
           <div class="icon">🍽️</div>
           <h3>Menu's & pairing</h3>
           <p>Vraag Claude in de chat om een menu samen te stellen uit je kookboek (bv. "stel een herfstmenu samen rond de paddenstoelenrisotto"), of om een drank-pairing te vinden bij een gerecht. Claude houdt rekening met thema, hoogtepunt en spanningsboog, en legt de foodpairing-logica uit. Je kan hieronder ook zelf een menu of pairing opstellen — vraag Claude in de chat om het achteraf te bekijken of te bespreken als je wil.</p>
-          <div style="display:flex; gap:8px; justify-content:center;">
+          <div class="btn-row" style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
             <button class="btn btn-primary" id="toggle-menu-builder">${ICONS.plus} Zelf een menu opstellen</button>
             <button class="btn" id="toggle-pairing-builder">${ICONS.plus} Zelf een pairing toevoegen</button>
           </div>
@@ -4303,7 +4309,7 @@ window.ICONS = {
         <h1 style="font-family:var(--font-display); font-size:28px; margin-bottom:6px;">${esc(kb.naam)}</h1>
         ${kb.beschrijving ? `<p style="color:var(--ink-soft); font-size:14.5px;">${esc(kb.beschrijving)}</p>` : ''}
       </div>
-      <div style="display:flex; gap:8px; flex-shrink:0;">
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn btn-sm" id="manage-hoofdstukken-btn">📑 Hoofdstukken</button>
         <button class="btn btn-sm" id="rename-kookboek-btn">${ICONS.edit} Naam/beschrijving</button>
         <button class="btn btn-sm btn-danger" id="delete-kookboek-btn">${ICONS.trash} Verwijderen</button>
