@@ -1105,6 +1105,9 @@ window.ICONS = {
   // Kolommen die nooit null mogen zijn, met hun standaardwaarde.
   const COL_DEFAULTS = { extra: {}, items: [], techniek_ids: [], gerelateerde_recept_ids: [] };
   const DB_ONLY = { created_at: 1, updated_at: 1 };
+  // Eigenaarskolommen van collecties: in het document zichtbaar, maar de database beheert ze.
+  const OWNER_COLS = { eigenaar_id: 1, zichtbaarheid: 1, verwijderd_op: 1 };
+  const OWNED = { kookboeken: 1, naslagwerken: 1 };
 
   // rij (database) -> document (zoals de app het kent)
   function fromRow(row){
@@ -1120,7 +1123,7 @@ window.ICONS = {
     const cols = TABLE_COLS[table];
     const row = {}, extra = {};
     Object.keys(doc).forEach(k => {
-      if (DB_ONLY[k]) return;
+      if (DB_ONLY[k] || OWNER_COLS[k]) return;
       if (cols.indexOf(k) >= 0) row[k] = doc[k]; else extra[k] = doc[k];
     });
     cols.forEach(c => {
@@ -1369,9 +1372,14 @@ window.ICONS = {
   async function loadRecipes(){ await loadAll(); }
 
   async function saveToCollection(collectionName, item){
-    if (!canWrite()) throw new Error("Je hebt geen schrijfrechten (rol: " + (state.role || "geen") + ")");
+    const uid = state.session && state.session.user && state.session.user.id;
+    if (OWNED[collectionName]){
+      if (!state.role) throw new Error("Je hebt geen rechten");
+      if (item.eigenaar_id && item.eigenaar_id !== uid) throw new Error("Enkel de eigenaar mag deze collectie wijzigen");
+    } else if (!canWrite()) throw new Error("Je hebt geen schrijfrechten (rol: " + (state.role || "geen") + ")");
     const { error } = await sb.from(collectionName).upsert(toRow(collectionName, item), { onConflict: "id" });
     if (error) throw new Error(error.message);
+    if (OWNED[collectionName] && !item.eigenaar_id){ item.eigenaar_id = uid; item.zichtbaarheid = item.zichtbaarheid || "prive"; }
     const list = cache[collectionName] || (cache[collectionName] = []);
     const copy = JSON.parse(JSON.stringify(item));
     const i = list.findIndex(x => x.id === item.id);
@@ -1380,10 +1388,15 @@ window.ICONS = {
     render();
   }
   async function deleteFromCollection(collectionName, id){
-    if (!canDelete()) throw new Error("Enkel een admin mag verwijderen (jouw rol: " + (state.role || "geen") + ")");
-    const { error, count } = await sb.from(collectionName).delete({ count: "exact" }).eq("id", id);
-    if (error) throw new Error(error.message);
-    if (count === 0) throw new Error("Niet verwijderd (geen rechten, of bestond al niet meer)");
+    if (OWNED[collectionName]){
+      const { error } = await sb.rpc("collectie_verwijderen", { p_tabel: collectionName, p_id: id });
+      if (error) throw new Error(error.message.indexOf("niet_gevonden") >= 0 ? "Niet verwijderd (enkel de eigenaar mag dit)" : error.message);
+    } else {
+      if (!canDelete()) throw new Error("Enkel een admin mag verwijderen (jouw rol: " + (state.role || "geen") + ")");
+      const { error, count } = await sb.from(collectionName).delete({ count: "exact" }).eq("id", id);
+      if (error) throw new Error(error.message);
+      if (count === 0) throw new Error("Niet verwijderd (geen rechten, of bestond al niet meer)");
+    }
     cache[collectionName] = (cache[collectionName] || []).filter(x => x.id !== id);
     setterFor(collectionName)(cache[collectionName].slice());
     render();
@@ -1563,8 +1576,10 @@ window.ICONS = {
 
   // Rollen in de interface: knoppen verbergen die de rol toch niet mag gebruiken (de database blokkeert het hoe dan ook).
   function applyRoleUI(){
-    if (!canWrite()) document.querySelectorAll('[id^="add-"][id$="-btn"], #empty-add-btn').forEach(el => { el.style.display = "none"; });
-    if (!canDelete()) document.querySelectorAll('[id^="delete-"][id$="-btn"]').forEach(el => { el.style.display = "none"; });
+    // Collecties (kookboeken/naslagwerken) zijn van de gebruiker zelf: die knoppen blijven voor elke rol zichtbaar.
+    const EIGEN = ["add-kookboek-btn","add-naslagwerk-btn","add-to-kookboek-btn","delete-kookboek-btn","delete-naslagwerk-btn"];
+    if (!canWrite()) document.querySelectorAll('[id^="add-"][id$="-btn"], #empty-add-btn').forEach(el => { if (EIGEN.indexOf(el.id) < 0) el.style.display = "none"; });
+    if (!canDelete()) document.querySelectorAll('[id^="delete-"][id$="-btn"]').forEach(el => { if (EIGEN.indexOf(el.id) < 0) el.style.display = "none"; });
   }
 
   // ---------- Beheer (admin): aanvragen goedkeuren, rollen wijzigen ----------
@@ -4809,7 +4824,7 @@ window.ICONS = {
     const deleteKookboekBtn = $("#delete-kookboek-btn");
     if (deleteKookboekBtn) deleteKookboekBtn.addEventListener("click", async () => {
       const kb = getKookboek(state.activeKookboekId);
-      const ok = await confirmDialog(`"${kb.naam}" wordt permanent verwijderd (de recepten zelf blijven bestaan). Doorgaan?`, {confirmLabel: "Verwijderen"});
+      const ok = await confirmDialog(`"${kb.naam}" wordt verwijderd (de recepten zelf blijven bestaan). Doorgaan?`, {confirmLabel: "Verwijderen"});
       if (ok){
         await deleteKookboek(kb.id);
         state.activeKookboekId = null;
@@ -5428,7 +5443,7 @@ window.ICONS = {
     const deleteNaslagwerkBtn = $("#delete-naslagwerk-btn");
     if (deleteNaslagwerkBtn) deleteNaslagwerkBtn.addEventListener("click", async () => {
       const nw = getNaslagwerk(state.activeNaslagwerkId);
-      const ok = await confirmDialog(`"${nw.naam}" wordt permanent verwijderd (de technieken zelf blijven bestaan). Doorgaan?`, {confirmLabel: "Verwijderen"});
+      const ok = await confirmDialog(`"${nw.naam}" wordt verwijderd (de technieken zelf blijven bestaan). Doorgaan?`, {confirmLabel: "Verwijderen"});
       if (ok){
         await deleteNaslagwerk(nw.id);
         state.activeNaslagwerkId = null;
