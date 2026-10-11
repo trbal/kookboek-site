@@ -1204,6 +1204,7 @@ window.ICONS = {
       <form id="login-form" style="background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:32px 28px; width:100%; max-width:360px; display:flex; flex-direction:column; gap:14px;">
         <div class="brand" style="justify-content:center; margin-bottom:6px;"><span class="brand-mark">🫒</span><span class="brand-name">Kookboek</span></div>
         <div style="text-align:center; font-weight:600;">${aanvragen ? "Account aanvragen" : "Inloggen"}</div>
+        ${aanvragen ? `<input id="login-naam" type="text" placeholder="Weergavenaam (zichtbaar voor anderen)" autocomplete="nickname" required minlength="2" maxlength="40" style="${INPUT_STYLE}">` : ""}
         <input id="login-email" type="email" placeholder="E-mailadres" autocomplete="username" required style="${INPUT_STYLE}">
         <input id="login-password" type="password" placeholder="Wachtwoord${aanvragen ? " (minstens 8 tekens)" : ""}" autocomplete="${aanvragen ? "new-password" : "current-password"}" required minlength="${aanvragen ? 8 : 1}" style="${INPUT_STYLE}">
         ${aanvragen ? `<input id="login-password2" type="password" placeholder="Herhaal wachtwoord" autocomplete="new-password" required style="${INPUT_STYLE}">` : ""}
@@ -1232,7 +1233,11 @@ window.ICONS = {
         if (password !== document.getElementById("login-password2").value){
           state.loginError = "De twee wachtwoorden zijn niet gelijk."; state.loginInfo = null; render(); return;
         }
-        const { error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
+        const naam = document.getElementById("login-naam").value.trim();
+        if (naam.length < 2 || naam.length > 40){
+          state.loginError = "Geef een weergavenaam van 2 tot 40 tekens."; state.loginInfo = null; render(); return;
+        }
+        const { error } = await sb.auth.signUp({ email, password, options: { data: { weergavenaam: naam }, emailRedirectTo: location.origin + location.pathname } });
         if (error){ state.loginError = "Aanvraag mislukt: " + error.message; state.loginInfo = null; render(); return; }
         state.loginError = null;
         state.loginInfo = "Bijna klaar. We stuurden een bevestigingsmail naar " + email + ". Klik op de link in die mail (kijk ook in je spam). Daarna beoordeelt de beheerder je aanvraag.";
@@ -1258,6 +1263,11 @@ window.ICONS = {
     const { data, error } = await sb.from("app_users").select("role").eq("user_id", uid).maybeSingle();
     state.role = (!error && data) ? data.role : null;
     state.roleError = error ? error.message : null;
+    state.naam = null;
+    if (state.role){
+      const pr = await sb.from("profielen").select("weergavenaam").eq("user_id", uid).maybeSingle();
+      state.naam = (!pr.error && pr.data) ? pr.data.weergavenaam : null;
+    }
     state.roleLoaded = true;
   }
   async function startApp(){
@@ -1274,7 +1284,7 @@ window.ICONS = {
       const had = !!state.session;
       state.session = session;
       if (had && !session){
-        state.role = null; state.roleLoaded = false; state.started = false;
+        state.role = null; state.naam = null; state.naamEdit = false; state.roleLoaded = false; state.started = false;
         render();
       } else if (!had && session && !state.started){
         setTimeout(startApp, 0);
@@ -1284,7 +1294,7 @@ window.ICONS = {
   }
   async function logout(){
     await sb.auth.signOut();
-    state.session = null; state.role = null; state.roleLoaded = false; state.started = false;
+    state.session = null; state.role = null; state.naam = null; state.naamEdit = false; state.roleLoaded = false; state.started = false;
     Object.keys(cache).forEach(k => delete cache[k]);
     render();
   }
@@ -1315,6 +1325,41 @@ window.ICONS = {
       if (!document.getElementById("pending-recheck")) { clearInterval(window._pendingTimer); return; }
       recheck();
     }, 30000);
+  }
+
+  // Weergavenaam: verplicht (eerste keer) of wijzigen via de topbar.
+  function renderNaamScherm(){
+    const wijzigen = !!state.naam;
+    return `
+    <div style="min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;">
+      <form id="naam-form" style="background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:32px 28px; width:100%; max-width:380px; display:flex; flex-direction:column; gap:14px;">
+        <div class="brand" style="justify-content:center;"><span class="brand-mark">🫒</span><span class="brand-name">Kookboek</span></div>
+        <div style="text-align:center; font-weight:600;">${wijzigen ? "Weergavenaam wijzigen" : "Kies je weergavenaam"}</div>
+        <p style="font-size:13.5px; line-height:1.45; margin:0;">Andere gebruikers zien deze naam, samen met je rol, bij je collecties, beoordelingen en notities.</p>
+        <input id="naam-input" type="text" value="${esc(state.naam || "")}" placeholder="Weergavenaam" required minlength="2" maxlength="40" style="${INPUT_STYLE}">
+        <div id="naam-error" style="color:var(--danger); font-size:13px; min-height:18px;">${esc(state.naamError || "")}</div>
+        <button class="btn btn-primary" type="submit" id="naam-save" style="justify-content:center;">Opslaan</button>
+        ${wijzigen ? `<button class="btn btn-sm" type="button" id="naam-cancel" style="justify-content:center;">Annuleren</button>` : `<button class="btn btn-sm" type="button" id="naam-logout" style="justify-content:center;">Uitloggen</button>`}
+      </form>
+    </div>`;
+  }
+  function attachNaamHandlers(){
+    const form = document.getElementById("naam-form");
+    if (!form) return;
+    const cancel = document.getElementById("naam-cancel");
+    if (cancel) cancel.addEventListener("click", () => { state.naamEdit = false; state.naamError = null; render(); });
+    const lo = document.getElementById("naam-logout");
+    if (lo) lo.addEventListener("click", () => logout());
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const naam = document.getElementById("naam-input").value.trim();
+      if (naam.length < 2 || naam.length > 40){ state.naamError = "Geef een naam van 2 tot 40 tekens."; render(); return; }
+      document.getElementById("naam-save").disabled = true;
+      const { error } = await sb.from("profielen").upsert({ user_id: state.session.user.id, weergavenaam: naam }, { onConflict: "user_id" });
+      if (error){ state.naamError = "Opslaan mislukt: " + error.message; render(); return; }
+      state.naam = naam; state.naamEdit = false; state.naamError = null;
+      render();
+    });
   }
 
   // Rollen in de interface: knoppen verbergen die de rol toch niet mag gebruiken (de database blokkeert het hoe dan ook).
@@ -1361,7 +1406,7 @@ window.ICONS = {
             <h3 style="margin:0 0 8px; font-size:15px;">Aanvragen (${aanvragen.length})</h3>
             ${aanvragen.length ? aanvragen.map(r => `
               <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:8px 0; border-top:1px solid var(--line);">
-                <div style="flex:1; min-width:200px;"><b>${esc(r.email)}</b><div style="font-size:12px; color:var(--muted, #777);">aangevraagd op ${esc(fmt(r.aangemaakt_op))}</div></div>
+                <div style="flex:1; min-width:200px;"><b>${esc(r.weergavenaam || r.email)}</b>${r.weergavenaam ? ` <span style="font-size:13px;">${esc(r.email)}</span>` : ""}<div style="font-size:12px; color:var(--muted, #777);">aangevraagd op ${esc(fmt(r.aangemaakt_op))}</div></div>
                 ${rolSelect(r.user_id, "viewer")}
                 <button class="btn btn-sm btn-primary" data-act="approve" data-id="${esc(r.user_id)}">Goedkeuren</button>
                 <button class="btn btn-sm btn-danger" data-act="reject" data-id="${esc(r.user_id)}" data-mail="${esc(r.email)}">Weigeren</button>
@@ -1371,7 +1416,7 @@ window.ICONS = {
             <h3 style="margin:0 0 8px; font-size:15px;">Gebruikers (${gebruikers.length})</h3>
             ${gebruikers.map(u => `
               <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:8px 0; border-top:1px solid var(--line);">
-                <div style="flex:1; min-width:200px;"><b>${esc(u.email)}</b>${u.user_id === me ? " (jij)" : ""}<div style="font-size:12px; color:var(--muted, #777);">laatst ingelogd ${esc(fmt(u.laatst_ingelogd))}</div></div>
+                <div style="flex:1; min-width:200px;"><b>${esc(u.weergavenaam || u.email)}</b>${u.weergavenaam ? ` <span style="font-size:13px;">${esc(u.email)}</span>` : ""}${u.user_id === me ? " (jij)" : ""}<div style="font-size:12px; color:var(--muted, #777);">laatst ingelogd ${esc(fmt(u.laatst_ingelogd))}</div></div>
                 ${rolSelect(u.user_id, u.role, `data-current="${esc(u.role)}" ${u.user_id === me ? "disabled" : ""}`)}
                 <button class="btn btn-sm btn-danger" data-act="revoke" data-id="${esc(u.user_id)}" data-mail="${esc(u.email)}" ${u.user_id === me ? "disabled" : ""}>Toegang intrekken</button>
               </div>`).join("")}
@@ -2437,6 +2482,11 @@ window.ICONS = {
       attachPendingHandlers();
       return;
     }
+    if (state.session && state.role && (!state.naam || state.naamEdit)){
+      app.innerHTML = renderNaamScherm();
+      attachNaamHandlers();
+      return;
+    }
     if (state.loading){
       app.innerHTML = '<div class="center-loading"><div class="loading-spinner"></div></div>';
       return;
@@ -2470,7 +2520,7 @@ window.ICONS = {
           ${state.activeTab === "technieken" ? `<button class="btn btn-primary" id="add-techniek-btn">${ICONS.plus} Techniek/documentatie toevoegen</button>` : ''}
           ${(state.activeTab === "naslagwerken" && !state.activeNaslagwerkId) ? `<button class="btn btn-primary" id="add-naslagwerk-btn">${ICONS.plus} Nieuw naslagwerk</button>` : ''}
           ${state.role === "admin" ? `<button class="btn btn-sm" id="beheer-btn" style="margin-left:8px;">Beheer</button>` : ''}
-          <span style="font-size:12px; color:var(--muted, #777); margin-left:8px;">${esc(state.role || "")}</span>
+          <button class="btn btn-sm btn-ghost" id="naam-btn" title="Weergavenaam wijzigen" style="margin-left:8px;">${esc(state.naam || "")} (${esc(state.role || "")})</button>
           <button class="btn btn-sm" id="logout-btn" title="Uitloggen" style="margin-left:8px;">Uitloggen</button>
         </div>
       </div>
@@ -5316,6 +5366,8 @@ window.ICONS = {
     if (retryBtn) retryBtn.addEventListener("click", () => loadAll());
     const logoutBtn = document.getElementById("logout-btn");
     if (logoutBtn) logoutBtn.addEventListener("click", () => logout());
+    const naamBtn = document.getElementById("naam-btn");
+    if (naamBtn) naamBtn.addEventListener("click", () => { state.naamEdit = true; render(); });
     const beheerBtn = document.getElementById("beheer-btn");
     if (beheerBtn) beheerBtn.addEventListener("click", () => openBeheer());
     const closeAddModal = $("#close-add-modal");
