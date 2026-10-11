@@ -651,6 +651,18 @@ button { cursor: pointer; }
 .upload-drop svg { width: 26px; height: 26px; margin-bottom: 8px; color: var(--ink-faint); }
 .upload-drop strong { color: var(--ink); }
 
+.rating-block { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 0 4px; }
+.rating-stars { display:inline-flex; gap:2px; }
+.rating-stars .star { background:none; border:0; padding:0 1px; font-size:24px; line-height:1; cursor:pointer; color:var(--line-strong); }
+.rating-stars .star.on { color:#d9a21b; }
+.rating-stars .star:hover { color:#e8b93a; }
+.rating-avg { background:none; border:0; padding:2px 4px; font:inherit; font-size:13px; color:var(--ink-soft); cursor:pointer; text-decoration:underline dotted; }
+.rating-who { width:100%; font-size:13px; background:var(--bg-soft, #f3f1ea); border-radius:8px; padding:8px 12px; display:flex; flex-direction:column; gap:3px; }
+.rating-badge { display:inline-block; font-size:12.5px; color:#a37512; margin:2px 0 4px; }
+.user-note { border-top:1px solid var(--line); padding:10px 0; font-size:14px; line-height:1.5; }
+.user-note .who { font-size:12px; color:var(--ink-faint); margin-bottom:2px; }
+.user-note .acts { margin-top:4px; display:flex; gap:8px; }
+.notes-composer { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
 .tab-row { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
 .tab-btn {
   padding: 10px 4px;
@@ -823,6 +835,7 @@ window.ICONS = {
 
   let state = {
     favorieten: new Set(),
+    ratings: [], itemNotes: [], profielMap: {}, ratingOpen: null, noteEditId: null, noteDrafts: {},
     activeTab: "eten", // eten | drinken | puur | menus | voorraad | planning | basis | kookboeken
     activeKookboekId: null,
     kookboekRenameOpen: false,
@@ -1148,6 +1161,140 @@ window.ICONS = {
     (data || []).forEach(r => set.add(r.item_type + ":" + r.item_id));
     state.favorieten = set;
   }
+  // ---------- Beoordelingen (publiek, per gebruiker) en notities met auteur ----------
+  const ITEM_TABLES = { recept: "recepten", drank: "dranken", puur: "puur", kruidenmix: "kruidenmixen", saus: "sauzen", dessertbasis: "dessertbasis" };
+  const NOTITIE_BRON_TYPES = { recept: 1, drank: 1, puur: 1, kruidenmix: 1, saus: 1, dessertbasis: 1 };
+  let ratingIdx = new Map(), notesIdx = new Map();
+  function rebuildSocialIndex(){
+    ratingIdx = new Map(); notesIdx = new Map();
+    state.ratings.forEach(r => { const k = r.item_type + ":" + r.item_id; (ratingIdx.get(k) || ratingIdx.set(k, []).get(k)).push(r); });
+    state.itemNotes.forEach(n => { const k = n.item_type + ":" + n.item_id; (notesIdx.get(k) || notesIdx.set(k, []).get(k)).push(n); });
+  }
+  async function loadSocial(){
+    const [r, n, p] = await Promise.all([
+      sb.from("beoordelingen").select("user_id,item_type,item_id,rating").range(0, 19999),
+      sb.from("item_notities").select("id,user_id,item_type,item_id,tekst,aangemaakt_op,gewijzigd_op").order("aangemaakt_op").range(0, 19999),
+      sb.rpc("profielen_lijst")
+    ]);
+    const err = r.error || n.error || p.error;
+    if (err) throw new Error("'beoordelingen/notities': " + err.message);
+    state.ratings = r.data || []; state.itemNotes = n.data || [];
+    state.profielMap = {}; (p.data || []).forEach(u => { state.profielMap[u.user_id] = u; });
+    rebuildSocialIndex();
+  }
+  function persoonLabel(uid){
+    const u = state.profielMap[uid];
+    if (!u) return "Voormalige gebruiker";
+    return (u.weergavenaam || "Naamloos") + " (" + (u.rol || "?") + ")";
+  }
+  function ratingStats(type, id){
+    const list = ratingIdx.get(type + ":" + id) || [], uid = state.session && state.session.user && state.session.user.id;
+    const sum = list.reduce((a, r) => a + r.rating, 0);
+    const mine = list.find(r => r.user_id === uid);
+    return { list, count: list.length, avg: list.length ? sum / list.length : 0, mine: mine ? mine.rating : 0 };
+  }
+  const fmtAvg = (x) => x.toFixed(1).replace(".", ",");
+  function ratingBadge(type, id){
+    const st = ratingStats(type, id);
+    return st.count ? `<span class="rating-badge">★ ${fmtAvg(st.avg)} <span style="color:var(--ink-faint);">(${st.count})</span></span>` : "";
+  }
+  function renderRatingBlock(type, id){
+    const st = ratingStats(type, id), key = type + ":" + id, open = state.ratingOpen === key;
+    const stars = [1,2,3,4,5].map(n => `<button class="star ${st.mine >= n ? "on" : ""}" data-rate="${n}" data-rtype="${type}" data-rid="${esc(id)}" aria-label="${n} ${n === 1 ? "ster" : "sterren"}" title="${st.mine === n ? "Klik om je beoordeling te verwijderen" : n + " van 5"}">★</button>`).join("");
+    const who = open ? `<div class="rating-who">${st.list.slice().sort((a, b) => b.rating - a.rating).map(r => `<div>${"★".repeat(r.rating)}<span style="color:var(--line-strong);">${"★".repeat(5 - r.rating)}</span> ${esc(persoonLabel(r.user_id))}</div>`).join("")}</div>` : "";
+    return `<div class="rating-block"><span class="rating-stars" title="Jouw beoordeling">${stars}</span>${st.count
+      ? `<button class="rating-avg" data-rate-who="${esc(key)}">Gemiddeld ${fmtAvg(st.avg)} · ${st.count} beoordeling${st.count === 1 ? "" : "en"}</button>`
+      : `<span style="font-size:13px;color:var(--ink-faint);">Nog niet beoordeeld</span>`}${who}</div>`;
+  }
+  function renderNotesBlock(type, id){
+    const key = type + ":" + id, me = state.session.user.id, admin = state.role === "admin";
+    const list = notesIdx.get(key) || [];
+    const items = list.map(n => {
+      const own = n.user_id === me;
+      if (state.noteEditId === n.id){
+        return `<div class="user-note"><textarea class="field-textarea" id="note-edit-ta" rows="3" maxlength="4000">${esc(n.tekst)}</textarea><div class="acts"><button class="btn btn-sm btn-primary" data-note-save="${esc(n.id)}">Opslaan</button><button class="btn btn-sm" data-note-cancel>Annuleren</button></div></div>`;
+      }
+      return `<div class="user-note"><div class="who">${esc(persoonLabel(n.user_id))} · ${esc((n.aangemaakt_op || "").slice(0, 10))}${n.gewijzigd_op ? " (gewijzigd)" : ""}</div>${esc(n.tekst).replace(/\n/g, "<br>")}${(own || admin) ? `<div class="acts">${own ? `<button class="btn btn-sm btn-ghost" data-note-edit="${esc(n.id)}">Wijzig</button>` : ""}<button class="btn btn-sm btn-ghost" data-note-del="${esc(n.id)}">Verwijder</button></div>` : ""}</div>`;
+    }).join("");
+    const draft = state.noteDrafts[key] || "";
+    return `
+        <div class="section-title">Notities van gebruikers${list.length ? " (" + list.length + ")" : ""}</div>
+        <div>${items || '<p style="color:var(--ink-faint);font-size:13.5px;">Nog geen notities.</p>'}</div>
+        <div class="notes-composer" data-note-key="${esc(key)}" data-ntype="${type}" data-nid="${esc(id)}">
+          <textarea class="field-textarea" rows="2" maxlength="4000" data-note-draft="${esc(key)}" placeholder="Voeg een notitie toe${admin && NOTITIE_BRON_TYPES[type] ? "" : " (komt op jouw naam)"}">${esc(draft)}</textarea>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            ${(admin && NOTITIE_BRON_TYPES[type]) ? `<select class="field-input" data-note-mode style="width:auto;"><option value="naam">Op mijn naam</option><option value="bron">Als bronnotitie</option></select>` : ""}
+            <button class="btn btn-sm btn-primary" data-note-add>Notitie toevoegen</button>
+          </div>
+        </div>`;
+  }
+  async function socialAction(e){
+    const t = e.target;
+    const rateBtn = t.closest("[data-rate]");
+    if (rateBtn){
+      const type = rateBtn.getAttribute("data-rtype"), id = rateBtn.getAttribute("data-rid"), n = +rateBtn.getAttribute("data-rate");
+      const uid = state.session.user.id, st = ratingStats(type, id);
+      let res;
+      if (st.mine === n){
+        res = await sb.from("beoordelingen").delete().eq("user_id", uid).eq("item_type", type).eq("item_id", id);
+        if (!res.error) state.ratings = state.ratings.filter(r => !(r.user_id === uid && r.item_type === type && r.item_id === id));
+      } else {
+        res = await sb.from("beoordelingen").upsert({ user_id: uid, item_type: type, item_id: id, rating: n }, { onConflict: "user_id,item_type,item_id" });
+        if (!res.error){
+          const ex = state.ratings.find(r => r.user_id === uid && r.item_type === type && r.item_id === id);
+          if (ex) ex.rating = n; else state.ratings.push({ user_id: uid, item_type: type, item_id: id, rating: n });
+        }
+      }
+      if (res.error) showToast("Beoordeling opslaan mislukt: " + res.error.message);
+      rebuildSocialIndex(); render(); return;
+    }
+    const who = t.closest("[data-rate-who]");
+    if (who){ const k = who.getAttribute("data-rate-who"); state.ratingOpen = state.ratingOpen === k ? null : k; render(); return; }
+    const add = t.closest("[data-note-add]");
+    if (add){
+      const box = add.closest(".notes-composer"), type = box.getAttribute("data-ntype"), id = box.getAttribute("data-nid"), key = box.getAttribute("data-note-key");
+      const tekst = box.querySelector("textarea").value.trim();
+      if (!tekst){ showToast("Typ eerst een notitie"); return; }
+      const modeEl = box.querySelector("[data-note-mode]");
+      if (modeEl && modeEl.value === "bron"){
+        const table = ITEM_TABLES[type], item = (cache[table] || []).find(x => x.id === id);
+        if (!item){ showToast("Item niet gevonden"); return; }
+        try { await saveToCollection(table, Object.assign({}, item, { notities: (item.notities || []).concat([{ tekst, datum: todayISO() }]) })); }
+        catch(err){ showToast("Opslaan mislukt: " + err.message); return; }
+        delete state.noteDrafts[key]; showToast("Bronnotitie toegevoegd"); render(); return;
+      }
+      const { data, error } = await sb.from("item_notities").insert({ item_type: type, item_id: id, tekst, user_id: state.session.user.id }).select().single();
+      if (error){ showToast("Notitie opslaan mislukt: " + error.message); return; }
+      state.itemNotes.push(data); delete state.noteDrafts[key]; rebuildSocialIndex(); render(); return;
+    }
+    const del = t.closest("[data-note-del]");
+    if (del){
+      if (!(await confirmDialog("Deze notitie verwijderen?", { confirmLabel: "Verwijderen" }))) return;
+      const id = del.getAttribute("data-note-del");
+      const { error } = await sb.from("item_notities").delete().eq("id", id);
+      if (error){ showToast("Verwijderen mislukt: " + error.message); return; }
+      state.itemNotes = state.itemNotes.filter(n => n.id !== id); rebuildSocialIndex(); render(); return;
+    }
+    const ed = t.closest("[data-note-edit]");
+    if (ed){ state.noteEditId = ed.getAttribute("data-note-edit"); render(); return; }
+    if (t.closest("[data-note-cancel]")){ state.noteEditId = null; render(); return; }
+    const sv = t.closest("[data-note-save]");
+    if (sv){
+      const id = sv.getAttribute("data-note-save"), tekst = document.getElementById("note-edit-ta").value.trim();
+      if (!tekst){ showToast("De notitie mag niet leeg zijn"); return; }
+      const { error } = await sb.from("item_notities").update({ tekst, gewijzigd_op: new Date().toISOString() }).eq("id", id);
+      if (error){ showToast("Opslaan mislukt: " + error.message); return; }
+      const n = state.itemNotes.find(x => x.id === id); if (n){ n.tekst = tekst; n.gewijzigd_op = new Date().toISOString(); }
+      state.noteEditId = null; rebuildSocialIndex(); render(); return;
+    }
+  }
+  function initSocialHandlers(){
+    if (window._socialInit) return; window._socialInit = true;
+    const app = document.getElementById("app");
+    app.addEventListener("click", (e) => { if (e.target.closest("[data-rate],[data-rate-who],[data-note-add],[data-note-del],[data-note-edit],[data-note-cancel],[data-note-save]")) socialAction(e); });
+    app.addEventListener("input", (e) => { const k = e.target.getAttribute && e.target.getAttribute("data-note-draft"); if (k) state.noteDrafts[k] = e.target.value; });
+  }
+
   async function toggleFavoriet(table, item){
     const ft = FAV_TYPES[table], uid = state.session.user.id;
     if (!ft || !item) return;
@@ -1170,6 +1317,7 @@ window.ICONS = {
     state.loading = true; state.loadError = null; render();
     try {
       await loadFavorieten();
+      await loadSocial();
       await Promise.all(COLLECTIONS.map(async ([name, set]) => {
         cache[name] = await fetchCollection(name);
         set(cache[name]);
@@ -1189,6 +1337,9 @@ window.ICONS = {
     try {
       let changed = false;
       await loadFavorieten();
+      const socBefore = JSON.stringify([state.ratings, state.itemNotes, state.profielMap]);
+      await loadSocial();
+      if (JSON.stringify([state.ratings, state.itemNotes, state.profielMap]) !== socBefore) changed = true;
       for (const [name, set] of COLLECTIONS){
         const fresh = await fetchCollection(name);
         if (JSON.stringify(fresh) !== JSON.stringify(cache[name])){ cache[name] = fresh; set(fresh); changed = true; }
@@ -1306,6 +1457,7 @@ window.ICONS = {
   async function startApp(){
     if (state.started) return;
     state.started = true;
+    initSocialHandlers();
     await loadRole();
     if (state.role) await loadAll(); else render();
   }
@@ -1327,7 +1479,7 @@ window.ICONS = {
   }
   async function logout(){
     await sb.auth.signOut();
-    state.session = null; state.favorieten = new Set(); state.role = null; state.naam = null; state.naamEdit = false; state.roleLoaded = false; state.started = false;
+    state.session = null; state.favorieten = new Set(); state.ratings = []; state.itemNotes = []; state.profielMap = {}; rebuildSocialIndex(); state.role = null; state.naam = null; state.naamEdit = false; state.roleLoaded = false; state.started = false;
     Object.keys(cache).forEach(k => delete cache[k]);
     render();
   }
@@ -1696,7 +1848,7 @@ window.ICONS = {
         <span class="emoji">🍸</span>
       </div>
       <div class="card-body">
-        <div class="card-title">${esc(d.naam)}</div>
+        <div class="card-title">${esc(d.naam)}</div>${ratingBadge("drank", d.id)}
         <div class="card-desc">${esc(d.beschrijving||"")}</div>
         <div class="card-tags"><span class="tag">${esc(displayTag(d.drank_type)||'')}</span>${d.alcoholisch===false?'<span class="tag">alcoholvrij</span>':''}${(d.hoofdingredienten||[]).slice(0,2).map(h=>`<span class="tag">${esc(displayTag(h))}</span>`).join("")}</div>
         <div class="card-meta">
@@ -1767,6 +1919,7 @@ window.ICONS = {
       <div class="detail-hero">
         <h1 class="detail-title">${esc(d.naam)}</h1>
         <p class="detail-desc">${esc(d.beschrijving||"")}</p>
+        ${renderRatingBlock('drank', d.id)}
         <div class="detail-meta-row">
           <span>${ICONS.clock} ${d.bereidingstijd_minuten||0} min</span>
           <span><span class="difficulty-dot diff-${d.moeilijkheid||'gemiddeld'}"></span>${d.moeilijkheid||'–'}</span>
@@ -1826,11 +1979,12 @@ window.ICONS = {
         ${d.garnering ? `<div class="section-title">Garnering</div><p style="font-size:14.5px;">${esc(d.garnering)}</p>` : ''}
 
         ${(d.notities&&d.notities.length) ? `
-        <div class="section-title">Notities</div>
+        <div class="section-title">Bronnotities</div>
         <div class="notes-list">
           ${d.notities.map(n => `<div class="note-item"><div class="note-date">${esc(n.datum||'')}</div>${esc(n.tekst)}</div>`).join("")}
         </div>` : ''}
 
+        ${renderNotesBlock('drank', d.id)}
         <div class="section-title">Versiegeschiedenis</div>
         <div class="version-list">
           ${versies.map(v => `
@@ -1924,8 +2078,8 @@ window.ICONS = {
         <p style="font-size:12px; color:var(--ink-faint); margin-top:6px;">Verwijs naar een ingrediënt met <code>{id}</code>. Bestaande koppelingen blijven behouden als je de tekst niet aanraakt.</p>
       </div>
 
-      <div class="field-row">
-        <label class="field-label">Notitie toevoegen (geen nieuwe versie)</label>
+      <div class="field-row" style="display:${state.role==='admin'?'block':'none'};">
+        <label class="field-label">Bronnotitie toevoegen (geen nieuwe versie)</label>
         <div style="display:flex; gap:8px;">
           <input class="field-input" id="edit-drink-note-input" placeholder="Bv. iets minder zoet volgende keer">
           <button class="btn btn-sm" id="edit-drink-note-add">Toevoegen</button>
@@ -1933,7 +2087,7 @@ window.ICONS = {
       </div>
       <div style="display:flex; gap:8px; margin-top:14px;">
         <button class="btn btn-primary btn-sm" id="save-drink-manual-edit">Opslaan (nieuwe versie)</button>
-        <button class="btn btn-sm" id="save-drink-note-only">Alleen notitie opslaan</button>
+        <button class="btn btn-sm" id="save-drink-note-only" style="display:${state.role==='admin'?'inline-flex':'none'};">Alleen notitie opslaan</button>
       </div>
       <p style="font-size:12px; color:var(--ink-faint); margin-top:10px;">Elke opslag hier maakt een nieuwe versie aan; de vorige blijft bewaard in de versiegeschiedenis.</p>
     </div>`;
@@ -2727,7 +2881,7 @@ window.ICONS = {
         <span class="emoji">${r._emoji || "🍽️"}</span>
       </div>
       <div class="card-body">
-        <div class="card-title">${esc(r.titel)}</div>
+        <div class="card-title">${esc(r.titel)}</div>${ratingBadge("recept", r.id)}
         <div class="card-desc">${esc(r.beschrijving||"")}</div>
         <div class="card-tags">${asTagArray(r.stijl_tags).slice(0,2).map(t=>`<span class="tag">${esc(displayTag(t))}</span>`).join("")}</div>
         <div class="card-meta">
@@ -2751,6 +2905,7 @@ window.ICONS = {
       <div class="detail-hero">
         <h1 class="detail-title">${esc(r.titel)}</h1>
         <p class="detail-desc">${esc(r.beschrijving||"")}</p>
+        ${renderRatingBlock('recept', r.id)}
         <div class="detail-meta-row">
           <span>${ICONS.clock} ${r.bereidingstijd_minuten||0} min bereiding${r.wachttijd_minuten?` + ${r.wachttijd_minuten} min wachttijd`:''}</span>
           <span><span class="difficulty-dot diff-${(r.moeilijkheid||'gemiddeld').toLowerCase()}"></span>${displayTag(r.moeilijkheid)||'–'}</span>
@@ -2814,11 +2969,12 @@ window.ICONS = {
         ${macros.bron ? `<span class="macro-badge ${macros.bron}">${macros.bron === 'geschat' ? 'Geschat, geen labwaarde' : macros.bron === 'handmatig' ? 'Zelf ingevoerd' : 'Opgegeven door bron'}</span>` : ''}
 
         ${(r.notities&&r.notities.length) ? `
-        <div class="section-title">Notities</div>
+        <div class="section-title">Bronnotities</div>
         <div class="notes-list">
           ${r.notities.map(n => `<div class="note-item"><div class="note-date">${esc(n.datum||'')}</div>${esc(n.tekst)}</div>`).join("")}
         </div>` : ''}
 
+        ${renderNotesBlock('recept', r.id)}
         <div class="section-title">Versiegeschiedenis</div>
         <div class="version-list">
           ${versies.map(v => `
@@ -2950,8 +3106,8 @@ window.ICONS = {
         <p style="font-size:12px; color:var(--ink-faint); margin-top:6px;">Vul je deze zelf in (bv. na opzoeken), dan komt er "Zelf ingevoerd" te staan in plaats van "Geschat". Ingrediënten wijzigen zonder de macro's aan te passen, zet het label terug op "Geschat".</p>
       </div>
 
-      <div class="field-row">
-        <label class="field-label">Notitie toevoegen (geen nieuwe versie, gewoon een aantekening)</label>
+      <div class="field-row" style="display:${state.role==='admin'?'block':'none'};">
+        <label class="field-label">Bronnotitie toevoegen (geen nieuwe versie, gewoon een aantekening)</label>
         <div style="display:flex; gap:8px;">
           <input class="field-input" id="edit-note-input" placeholder="Bv. volgende keer minder zout">
           <button class="btn btn-sm" id="edit-note-add">Toevoegen</button>
@@ -3038,6 +3194,7 @@ window.ICONS = {
     if (state.basisSubTab === "sauzen") return state.sauzen;
     return state.dessertbasis;
   }
+  function basisTypeOf(){ return state.basisSubTab === "kruidenmixen" ? "kruidenmix" : (state.basisSubTab === "sauzen" ? "saus" : "dessertbasis"); }
   function saveBasisItem(item){
     if (state.basisSubTab === "kruidenmixen") return saveKruidenmix(item);
     if (state.basisSubTab === "sauzen") return saveSaus(item);
@@ -3103,7 +3260,7 @@ window.ICONS = {
         <span class="emoji">${basisSubTabEmoji(state.basisSubTab)}</span>
       </div>
       <div class="card-body">
-        <div class="card-title">${esc(item.naam)}</div>
+        <div class="card-title">${esc(item.naam)}</div>${ratingBadge(basisTypeOf(), item.id)}
         <div class="card-desc">${esc(item.beschrijving||"")}</div>
         <div class="card-tags">${asTagArray(item.stijl_tags).slice(0,2).map(t=>`<span class="tag">${esc(displayTag(t))}</span>`).join("")}</div>
         <div class="card-meta">
@@ -3182,8 +3339,8 @@ window.ICONS = {
         </div>
       </div>
 
-      <div class="field-row">
-        <label class="field-label">Notitie toevoegen (geen nieuwe versie)</label>
+      <div class="field-row" style="display:${state.role==='admin'?'block':'none'};">
+        <label class="field-label">Bronnotitie toevoegen (geen nieuwe versie)</label>
         <div style="display:flex; gap:8px;">
           <input class="field-input" id="edit-basis-note-input" placeholder="Bv. iets meer zout volgende keer">
           <button class="btn btn-sm" id="edit-basis-note-add">Toevoegen</button>
@@ -3191,7 +3348,7 @@ window.ICONS = {
       </div>
       <div style="display:flex; gap:8px; margin-top:14px;">
         <button class="btn btn-primary btn-sm" id="save-basis-manual-edit">Opslaan (nieuwe versie)</button>
-        <button class="btn btn-sm" id="save-basis-note-only">Alleen notitie opslaan</button>
+        <button class="btn btn-sm" id="save-basis-note-only" style="display:${state.role==='admin'?'inline-flex':'none'};">Alleen notitie opslaan</button>
       </div>
       <p style="font-size:12px; color:var(--ink-faint); margin-top:10px;">Elke opslag hier maakt een nieuwe versie aan; de vorige blijft bewaard in de versiegeschiedenis.</p>
     </div>`;
@@ -3207,6 +3364,7 @@ window.ICONS = {
       <div class="detail-hero">
         <h1 class="detail-title">${esc(item.naam)}</h1>
         <p class="detail-desc">${esc(item.beschrijving||"")}</p>
+        ${renderRatingBlock(basisTypeOf(), item.id)}
         <div class="detail-meta-row">
           <span>${ICONS.clock} ${item.bereidingstijd_minuten||0} min</span>
           ${item.houdbaarheid ? `<span>Houdbaar: ${esc(item.houdbaarheid)}</span>` : ''}
@@ -3275,11 +3433,12 @@ window.ICONS = {
         ${item.macros_per_portie.bron ? `<span class="macro-badge ${item.macros_per_portie.bron}">${item.macros_per_portie.bron === 'geschat' ? 'Geschat, geen labwaarde' : item.macros_per_portie.bron === 'handmatig' ? 'Zelf ingevoerd' : 'Opgegeven door bron'}</span>` : ''}` : ''}
 
         ${(item.notities&&item.notities.length) ? `
-        <div class="section-title">Notities</div>
+        <div class="section-title">Bronnotities</div>
         <div class="notes-list">
           ${item.notities.map(n => `<div class="note-item"><div class="note-date">${esc(n.datum||'')}</div>${esc(n.tekst)}</div>`).join("")}
         </div>` : ''}
 
+        ${renderNotesBlock(basisTypeOf(), item.id)}
         <div class="section-title">Versiegeschiedenis</div>
         <div class="version-list">
           ${versies.map(v => `
@@ -3557,7 +3716,7 @@ window.ICONS = {
         <span class="emoji">${PUUR_EMOJI[x.categorie]||'🍶'}</span>
       </div>
       <div class="card-body">
-        <div class="card-title">${esc(x.naam)}</div>
+        <div class="card-title">${esc(x.naam)}</div>${ratingBadge("puur", x.id)}
         <div class="card-desc">${esc(x.beschrijving||"")}</div>
         <div class="card-tags"><span class="tag">${esc(displayTag(x.categorie)||'')}</span>${x.land?`<span class="tag">${esc(displayTag(x.land))}</span>`:''}</div>
         <div class="card-meta">
@@ -3712,8 +3871,8 @@ window.ICONS = {
       </div>
       `}
 
-      <div class="field-row">
-        <label class="field-label">Notitie toevoegen (geen nieuwe versie)</label>
+      <div class="field-row" style="display:${state.role==='admin'?'block':'none'};">
+        <label class="field-label">Bronnotitie toevoegen (geen nieuwe versie)</label>
         <div style="display:flex; gap:8px;">
           <input class="field-input" id="edit-puur-note-input" placeholder="Bv. tweede keer geproefd, iets ronder">
           <button class="btn btn-sm" id="edit-puur-note-add">Toevoegen</button>
@@ -3721,7 +3880,7 @@ window.ICONS = {
       </div>
       <div style="display:flex; gap:8px; margin-top:14px;">
         <button class="btn btn-primary btn-sm" id="save-puur-manual-edit">Opslaan (nieuwe versie)</button>
-        <button class="btn btn-sm" id="save-puur-note-only">Alleen notitie opslaan</button>
+        <button class="btn btn-sm" id="save-puur-note-only" style="display:${state.role==='admin'?'inline-flex':'none'};">Alleen notitie opslaan</button>
       </div>
       <p style="font-size:12px; color:var(--ink-faint); margin-top:10px;">Elke opslag hier maakt een nieuwe versie aan; de vorige blijft bewaard in de versiegeschiedenis.</p>
     </div>`;
@@ -3736,6 +3895,7 @@ window.ICONS = {
       <div class="detail-hero">
         <h1 class="detail-title">${esc(x.naam)}</h1>
         <p class="detail-desc">${esc(x.beschrijving||"")}</p>
+        ${renderRatingBlock('puur', x.id)}
         <div class="detail-meta-row">
           <span>${esc(x.categorie||'')}</span>
           ${x.producent ? `<span>${esc(x.producent)}</span>` : ''}
@@ -3781,11 +3941,12 @@ window.ICONS = {
         })()}
 
         ${(x.notities&&x.notities.length) ? `
-        <div class="section-title">Notities</div>
+        <div class="section-title">Bronnotities</div>
         <div class="notes-list">
           ${x.notities.map(n => `<div class="note-item"><div class="note-date">${esc(n.datum||'')}</div>${esc(n.tekst)}</div>`).join("")}
         </div>` : ''}
 
+        ${renderNotesBlock('puur', x.id)}
         <div class="section-title">Versiegeschiedenis</div>
         <div class="version-list">
           ${versies.map(v => `
@@ -4095,6 +4256,7 @@ window.ICONS = {
         }).join("")}
       </div>
       ${m.notities ? `<p style="font-size:12.5px; color:var(--ink-faint); margin-top:10px;">${esc(m.notities)}</p>` : ''}
+      ${renderRatingBlock('menu', m.id)}
     </div>`;
   }
 
@@ -4110,6 +4272,7 @@ window.ICONS = {
       <div style="font-family:var(--font-display); font-size:16px; margin-bottom:6px; padding-right:60px;">${a?esc(a.titel||a.naam):'?'} + ${b?esc(b.titel||b.naam):'?'}</div>
       <div class="card-tags" style="margin-bottom:8px;">${(p.principes||[]).map(pr=>`<span class="tag">${esc(displayTag(pr))}</span>`).join("")}</div>
       <p style="font-size:13.5px; color:var(--ink-soft); line-height:1.5;">${esc(p.uitleg||'')}</p>
+      ${renderRatingBlock('pairing', p.id)}
     </div>`;
   }
 
@@ -4325,7 +4488,7 @@ window.ICONS = {
               <div class="card" data-open-kookboek="${kb.id}">
                 <div class="card-media"><span class="emoji">📖</span></div>
                 <div class="card-body">
-                  <div class="card-title">${esc(kb.naam)}</div>
+                  <div class="card-title">${esc(kb.naam)}</div>${ratingBadge("kookboek", kb.id)}
                   <div class="card-desc">${esc(kb.beschrijving||"")}</div>
                   <div class="card-meta"><span>${getKookboekItems(kb).length} item${getKookboekItems(kb).length===1?'':'s'}</span></div>
                 </div>
@@ -4389,6 +4552,7 @@ window.ICONS = {
       <div>
         <h1 style="font-family:var(--font-display); font-size:28px; margin-bottom:6px;">${esc(kb.naam)}</h1>
         ${kb.beschrijving ? `<p style="color:var(--ink-soft); font-size:14.5px;">${esc(kb.beschrijving)}</p>` : ''}
+        ${renderRatingBlock('kookboek', kb.id)}
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn btn-sm" id="manage-hoofdstukken-btn">📑 Hoofdstukken</button>
@@ -4820,7 +4984,7 @@ window.ICONS = {
     <div class="card" data-open-techniek="${t.id}">
       <div class="card-media"><span class="emoji">📚</span></div>
       <div class="card-body">
-        <div class="card-title">${esc(t.titel)}</div>
+        <div class="card-title">${esc(t.titel)}</div>${ratingBadge("techniek", t.id)}
         <div class="card-desc">${esc(t.samenvatting||"")}</div>
         <div class="card-tags">${t.categorie?`<span class="tag">${esc(displayTag(t.categorie))}</span>`:''}${asTagArray(t.stijl_tags).slice(0,2).map(tag=>`<span class="tag">${esc(displayTag(tag))}</span>`).join("")}</div>
       </div>
@@ -4838,6 +5002,7 @@ window.ICONS = {
         <div class="detail-meta-row">${t.categorie?`<span>${esc(t.categorie)}</span>`:''}</div>
         <div class="detail-tags">${asTagArray(t.stijl_tags).map(tag=>`<span class="tag">${esc(displayTag(tag))}</span>`).join("")}</div>
         ${renderBronBadge(t.bron)}
+        ${renderRatingBlock("techniek", t.id)}
         <div class="detail-actions">
           <button class="btn btn-sm" id="print-techniek-btn">🖨️ Afdrukken</button>
           <button class="btn btn-sm btn-danger" id="delete-techniek-btn">${ICONS.trash} Verwijderen</button>
@@ -4846,6 +5011,7 @@ window.ICONS = {
       <div class="modal-body" style="max-height:none;">
         <div class="section-title">Inhoud</div>
         <div style="font-size:14.5px; color:var(--ink); line-height:1.7;">${renderLightMarkdown(t.inhoud||'')}</div>
+        ${renderNotesBlock('techniek', t.id)}
         ${gekoppeld.length ? `
         <div class="section-title">Gerelateerde recepten</div>
         <div style="display:flex; flex-direction:column; gap:6px;">
@@ -4984,7 +5150,7 @@ window.ICONS = {
               <div class="card" data-open-naslagwerk="${nw.id}">
                 <div class="card-media"><span class="emoji">📚</span></div>
                 <div class="card-body">
-                  <div class="card-title">${esc(nw.naam)}</div>
+                  <div class="card-title">${esc(nw.naam)}</div>${ratingBadge("naslagwerk", nw.id)}
                   <div class="card-desc">${esc(nw.beschrijving||"")}</div>
                   <div class="card-meta"><span>${getNaslagwerkItems(nw).length} techniek${getNaslagwerkItems(nw).length===1?'':'en'}</span></div>
                 </div>
@@ -5039,6 +5205,7 @@ window.ICONS = {
       <div>
         <h1 style="font-family:var(--font-display); font-size:28px; margin-bottom:6px;">${esc(nw.naam)}</h1>
         ${nw.beschrijving ? `<p style="color:var(--ink-soft); font-size:14.5px;">${esc(nw.beschrijving)}</p>` : ''}
+        ${renderRatingBlock('naslagwerk', nw.id)}
       </div>
       <div style="display:flex; gap:8px; flex-shrink:0;">
         <button class="btn btn-sm" id="manage-nw-hoofdstukken-btn">📑 Hoofdstukken</button>
