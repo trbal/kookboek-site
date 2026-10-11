@@ -849,6 +849,8 @@ window.ICONS = {
 
   let state = {
     favorieten: new Set(),
+    verbergingen: new Set(),
+    toonVerborgen: false,
     ratings: [], itemNotes: [], profielMap: {}, ratingOpen: null, noteEditId: null, noteDrafts: {},
     activeTab: "eten", // eten | drinken | puur | menus | voorraad | planning | basis | kookboeken
     activeKookboekId: null,
@@ -1153,6 +1155,104 @@ window.ICONS = {
     ["naslagwerken", (items) => { state.naslagwerken = items; }]
   ];
   const cache = {};
+  // ---------- Collecties delen (Fase E) ----------
+  const myUid = () => state.session && state.session.user && state.session.user.id;
+  const isEigen = (c) => !c.eigenaar_id || c.eigenaar_id === myUid();
+  const verborgenKey = (tabel, id) => tabel + ":" + id;
+  const isVerborgen = (tabel, id) => !!(state.verbergingen && state.verbergingen.has(verborgenKey(tabel, id)));
+  async function loadVerbergingen(){
+    const { data, error } = await sb.from("collectie_verbergingen").select("tabel,collectie_id").eq("user_id", myUid()).range(0, 9999);
+    if (error) throw new Error("'collectie_verbergingen': " + error.message);
+    state.verbergingen = new Set((data || []).map(r => verborgenKey(r.tabel, r.collectie_id)));
+  }
+  function zichtbaarheidLabel(c){
+    return c.zichtbaarheid === "iedereen" ? "🌐 Gedeeld met iedereen" : c.zichtbaarheid === "gedeeld" ? "👥 Gedeeld met personen" : "🔒 Privé";
+  }
+  function eigenaarLabel(c){ return "van " + persoonLabel(c.eigenaar_id); }
+  function renderGedeeldBlok(lijst, tabel, openAttr, emoji, unit){
+    const gedeeld = lijst.filter(c => !isEigen(c)).sort((a,b) => (a.naam||"").localeCompare(b.naam||""));
+    if (!gedeeld.length) return "";
+    const verborgen = gedeeld.filter(c => isVerborgen(tabel, c.id)).length;
+    const zichtbaar = gedeeld.filter(c => state.toonVerborgen || !isVerborgen(tabel, c.id));
+    return `
+      <div class="section-title" style="margin-top:28px;">Gedeeld door anderen</div>
+      ${verborgen ? `<button class="btn btn-sm btn-ghost" data-toon-verborgen style="margin-bottom:10px;">${state.toonVerborgen ? "Verborgen collecties weer verbergen" : "Verborgen tonen (" + verborgen + ")"}</button>` : ""}
+      ${zichtbaar.length ? `<div class="grid">${zichtbaar.map(c => `
+        <div class="card" ${openAttr}="${esc(c.id)}" style="${isVerborgen(tabel, c.id) ? "opacity:.6;" : ""}">
+          <div class="card-media"><span class="emoji">${emoji}</span></div>
+          <div class="card-body">
+            <div class="card-title">${esc(c.naam)}</div>${ratingBadge(tabel === "kookboeken" ? "kookboek" : "naslagwerk", c.id)}
+            <div class="card-desc">${esc(c.beschrijving||"")}</div>
+            <div class="card-meta"><span>${esc(eigenaarLabel(c))}</span>${isVerborgen(tabel, c.id) ? "<span>verborgen</span>" : ""}</div>
+          </div>
+        </div>`).join("")}</div>` : `<p style="color:var(--ink-faint); font-size:13.5px;">Alles verborgen.</p>`}`;
+  }
+  function renderCollectieActies(c, tabel){
+    if (isEigen(c)) return "";
+    return `<div style="font-size:13px; color:var(--ink-soft); margin-top:6px;">Gedeeld door ${esc(persoonLabel(c.eigenaar_id))} · alleen lezen</div>`;
+  }
+  async function toggleVerberg(tabel, id){
+    const key = verborgenKey(tabel, id), uid = myUid(), nu = isVerborgen(tabel, id);
+    const res = nu
+      ? await sb.from("collectie_verbergingen").delete().eq("user_id", uid).eq("tabel", tabel).eq("collectie_id", id)
+      : await sb.from("collectie_verbergingen").insert({ user_id: uid, tabel, collectie_id: id });
+    if (res.error){ showToast("Opslaan mislukt: " + res.error.message); return; }
+    if (nu) state.verbergingen.delete(key); else state.verbergingen.add(key);
+    if (!nu){ if (tabel === "kookboeken") state.activeKookboekId = null; else state.activeNaslagwerkId = null; }
+    render();
+  }
+  async function openDelenModal(tabel, id){
+    const c = (cache[tabel] || []).find(x => x.id === id);
+    if (!c || !isEigen(c)) return;
+    const scrim = document.createElement("div");
+    scrim.className = "modal-scrim open"; scrim.style.zIndex = "250";
+    document.body.appendChild(scrim);
+    const close = () => { if (scrim.parentNode) scrim.parentNode.removeChild(scrim); };
+    scrim.addEventListener("click", (e) => { if (e.target === scrim) close(); });
+    scrim.innerHTML = `<div class="modal" style="max-width:460px;"><div style="background:var(--paper);border:1px solid var(--line);border-radius:var(--radius-lg);padding:24px;">Laden...</div></div>`;
+    const { data, error } = await sb.from("collectie_delingen").select("user_id").eq("tabel", tabel).eq("collectie_id", id);
+    if (error){ close(); showToast("Laden mislukt: " + error.message); return; }
+    const gekozen = new Set((data || []).map(r => r.user_id));
+    const mensen = Object.keys(state.profielMap).filter(u => u !== myUid()).map(u => state.profielMap[u]);
+    let modus = c.zichtbaarheid || "prive";
+    const teken = () => {
+      scrim.innerHTML = `
+      <div class="modal" style="max-width:460px;"><div style="background:var(--paper);border:1px solid var(--line);border-radius:var(--radius-lg);padding:24px;">
+        <h2 style="font-size:19px; margin-bottom:14px;">Delen: ${esc(c.naam)}</h2>
+        ${[["prive","🔒 Privé (alleen jij)"],["gedeeld","👥 Met bepaalde personen"],["iedereen","🌐 Met iedereen"]].map(([v,l]) => `
+          <label style="display:flex; gap:10px; align-items:center; padding:7px 0; cursor:pointer;"><input type="radio" name="delen-modus" value="${v}" ${modus===v?"checked":""}> <span>${l}</span></label>`).join("")}
+        ${modus === "gedeeld" ? `<div style="margin:8px 0 4px; max-height:240px; overflow-y:auto; border:1px solid var(--line); border-radius:var(--radius-sm); padding:6px 10px;">
+          ${mensen.length ? mensen.map(u => `<label style="display:flex; gap:10px; align-items:center; padding:6px 0; cursor:pointer;"><input type="checkbox" data-delen-persoon="${esc(u.user_id)}" ${gekozen.has(u.user_id)?"checked":""}> <span>${esc((u.weergavenaam || "Naamloos") + " (" + (u.rol || "?") + ")")}</span></label>`).join("") : `<p style="color:var(--ink-faint); font-size:13.5px;">Er zijn nog geen andere gebruikers.</p>`}
+        </div>` : ""}
+        <p style="font-size:12.5px; color:var(--ink-faint); margin:10px 0 0;">Anderen kunnen een gedeelde collectie alleen lezen, en voor zichzelf verbergen.</p>
+        <div class="confirm-actions" style="margin-top:16px; display:flex; gap:8px; justify-content:flex-end;">
+          <button class="btn btn-sm" id="delen-annuleer">Annuleren</button>
+          <button class="btn btn-sm btn-primary" id="delen-opslaan">Opslaan</button>
+        </div>
+      </div></div>`;
+      scrim.querySelectorAll('input[name="delen-modus"]').forEach(r => r.addEventListener("change", () => {
+        modus = r.value; teken();
+      }));
+      scrim.querySelectorAll("[data-delen-persoon]").forEach(cb => cb.addEventListener("change", () => {
+        const u = cb.getAttribute("data-delen-persoon"); if (cb.checked) gekozen.add(u); else gekozen.delete(u);
+      }));
+      scrim.querySelector("#delen-annuleer").addEventListener("click", close);
+      scrim.querySelector("#delen-opslaan").addEventListener("click", async () => {
+        const personen = modus === "gedeeld" ? Array.from(gekozen) : [];
+        const r = await sb.rpc("collectie_delen", { p_tabel: tabel, p_id: id, p_zichtbaarheid: modus, p_personen: personen });
+        if (r.error){ showToast("Delen mislukt: " + r.error.message); return; }
+        c.zichtbaarheid = modus; setterFor(tabel)((cache[tabel] || []).slice());
+        close(); showToast(modus === "prive" ? "Collectie is privé" : "Delen opgeslagen"); render();
+      });
+    };
+    teken();
+  }
+  function collectieAction(e){
+    const t = e.target;
+    const d = t.closest("[data-delen]"); if (d){ const [tb, id] = d.getAttribute("data-delen").split("|"); openDelenModal(tb, id); return; }
+    const v = t.closest("[data-verberg]"); if (v){ const [tb, id] = v.getAttribute("data-verberg").split("|"); toggleVerberg(tb, id); return; }
+    if (t.closest("[data-toon-verborgen]")){ state.toonVerborgen = !state.toonVerborgen; render(); }
+  }
   function setterFor(name){ return COLLECTIONS.find(c => c[0] === name)[1]; }
 
   async function fetchCollection(table){
@@ -1308,6 +1408,7 @@ window.ICONS = {
   function initSocialHandlers(){
     if (window._socialInit) return; window._socialInit = true;
     const app = document.getElementById("app");
+    app.addEventListener("click", (e) => { if (e.target.closest("[data-delen],[data-verberg],[data-toon-verborgen]")) collectieAction(e); });
     app.addEventListener("click", (e) => { if (e.target.closest("[data-rate],[data-rate-who],[data-note-add],[data-note-del],[data-note-edit],[data-note-cancel],[data-note-save]")) socialAction(e); });
     app.addEventListener("input", (e) => { const k = e.target.getAttribute && e.target.getAttribute("data-note-draft"); if (k) state.noteDrafts[k] = e.target.value; });
   }
@@ -1334,6 +1435,7 @@ window.ICONS = {
     state.loading = true; state.loadError = null; render();
     try {
       await loadFavorieten();
+      await loadVerbergingen();
       await loadSocial();
       await Promise.all(COLLECTIONS.map(async ([name, set]) => {
         cache[name] = await fetchCollection(name);
@@ -1354,6 +1456,7 @@ window.ICONS = {
     try {
       let changed = false;
       await loadFavorieten();
+      await loadVerbergingen();
       const socBefore = JSON.stringify([state.ratings, state.itemNotes, state.profielMap]);
       await loadSocial();
       if (JSON.stringify([state.ratings, state.itemNotes, state.profielMap]) !== socBefore) changed = true;
@@ -1506,7 +1609,7 @@ window.ICONS = {
   }
   async function logout(){
     await sb.auth.signOut();
-    state.session = null; state.favorieten = new Set(); state.ratings = []; state.itemNotes = []; state.profielMap = {}; rebuildSocialIndex(); state.role = null; state.naam = null; state.naamEdit = false; state.roleLoaded = false; state.started = false;
+    state.session = null; state.favorieten = new Set(); state.verbergingen = new Set(); state.toonVerborgen = false; state.ratings = []; state.itemNotes = []; state.profielMap = {}; rebuildSocialIndex(); state.role = null; state.naam = null; state.naamEdit = false; state.roleLoaded = false; state.started = false;
     Object.keys(cache).forEach(k => delete cache[k]);
     render();
   }
@@ -4498,7 +4601,7 @@ window.ICONS = {
 
   // ---------- Mijn kookboeken ----------
   function renderKookboekenOverzicht(){
-    const kbs = state.kookboeken.slice().sort((a,b) => (a.naam||"").localeCompare(b.naam||""));
+    const kbs = state.kookboeken.filter(isEigen).sort((a,b) => (a.naam||"").localeCompare(b.naam||""));
     return `
     <div class="layout" style="grid-template-columns:1fr; max-width:1180px;">
       <div>
@@ -4519,10 +4622,11 @@ window.ICONS = {
                 <div class="card-body">
                   <div class="card-title">${esc(kb.naam)}</div>${ratingBadge("kookboek", kb.id)}
                   <div class="card-desc">${esc(kb.beschrijving||"")}</div>
-                  <div class="card-meta"><span>${getKookboekItems(kb).length} item${getKookboekItems(kb).length===1?'':'s'}</span></div>
+                  <div class="card-meta"><span>${getKookboekItems(kb).length} item${getKookboekItems(kb).length===1?'':'s'}</span><span>${zichtbaarheidLabel(kb)}</span></div>
                 </div>
               </div>`).join("")}
           </div>`}
+        ${renderGedeeldBlok(state.kookboeken, "kookboeken", "data-open-kookboek", "📖")}
       </div>
     </div>`;
   }
@@ -4581,31 +4685,35 @@ window.ICONS = {
       <div>
         <h1 style="font-family:var(--font-display); font-size:28px; margin-bottom:6px;">${esc(kb.naam)}</h1>
         ${kb.beschrijving ? `<p style="color:var(--ink-soft); font-size:14.5px;">${esc(kb.beschrijving)}</p>` : ''}
+        ${renderCollectieActies(kb, "kookboeken")}
         ${renderRatingBlock('kookboek', kb.id)}
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${isEigen(kb) ? `
+        <button class="btn btn-sm" data-delen="kookboeken|${esc(kb.id)}">👥 Delen · ${esc(zichtbaarheidLabel(kb))}</button>
         <button class="btn btn-sm" id="manage-hoofdstukken-btn">📑 Hoofdstukken</button>
         <button class="btn btn-sm" id="rename-kookboek-btn">${ICONS.edit} Naam/beschrijving</button>
-        <button class="btn btn-sm btn-danger" id="delete-kookboek-btn">${ICONS.trash} Verwijderen</button>
+        <button class="btn btn-sm btn-danger" id="delete-kookboek-btn">${ICONS.trash} Verwijderen</button>` : `
+        <button class="btn btn-sm" data-verberg="kookboeken|${esc(kb.id)}">${isVerborgen("kookboeken", kb.id) ? "Weer tonen" : "Verbergen voor mij"}</button>`}
       </div>
     </div>
 
-    <div class="field-row" style="max-width:480px; margin-bottom:24px;">
+    ${isEigen(kb) ? `<div class="field-row" style="max-width:480px; margin-bottom:24px;">
       <label class="field-label">Toevoegen aan dit kookboek</label>
       <input class="field-input" id="kb-recipe-search" placeholder="Typ om te zoeken — recepten, cocktails, kruidenmixen, sauzen, dessertbasis..." autocomplete="off" value="${esc(state.kookboekRecipeSearch||'')}">
       <div id="kb-recipe-search-results" style="max-height:260px; overflow-y:auto; margin-top:6px; border:1px solid var(--line); border-radius:var(--radius-sm); ${state.kookboekRecipeSearch ? '' : 'display:none;'}">
         ${renderKookboekSearchResults(kb)}
       </div>
-    </div>
+    </div>` : ""}
 
     ${items.length === 0 ? `
       <div class="empty-state">
         <div class="icon">📖</div>
         <h3>Nog niets in dit kookboek</h3>
-        <p>Kies hierboven een recept, cocktail, kruidenmix, saus of dessertbasis om toe te voegen.</p>
+        <p>${isEigen(kb) ? "Kies hierboven een recept, cocktail, kruidenmix, saus of dessertbasis om toe te voegen." : "De eigenaar heeft hier nog niets aan toegevoegd."}</p>
       </div>` : renderKookboekItemsGrouped(kb)}
-    ` + (state.kookboekRenameOpen ? renderRenameKookboekModal(kb) : '')
-      + (state.kookboekHoofdstukkenBeheerOpen ? renderHoofdstukkenBeheerModal(kb) : '');
+    ` + (isEigen(kb) && state.kookboekRenameOpen ? renderRenameKookboekModal(kb) : '')
+      + (isEigen(kb) && state.kookboekHoofdstukkenBeheerOpen ? renderHoofdstukkenBeheerModal(kb) : '');
   }
 
   function renderKookboekItemCard({id, type, obj, info}, kb){
@@ -4614,14 +4722,14 @@ window.ICONS = {
     return `
     <div class="card" data-open-kookboek-item="${type}:${id}">
       <div class="card-media">
-        <button class="remove-row-btn" data-remove-from-kookboek="${type}:${id}" style="position:absolute; top:8px; right:8px; background:var(--paper); border-radius:50%;" title="Verwijder uit kookboek">${ICONS.x}</button>
+        ${isEigen(kb) ? `<button class="remove-row-btn" data-remove-from-kookboek="${type}:${id}" style="position:absolute; top:8px; right:8px; background:var(--paper); border-radius:50%;" title="Verwijder uit kookboek">${ICONS.x}</button>` : ""}
         <span class="emoji">${info.emoji}</span>
       </div>
       <div class="card-body">
         <div class="card-title">${esc(info.naam(obj))}</div>
         <div class="card-desc">${esc(obj.beschrijving||"")}</div>
         <div class="card-meta"><span>${info.label}</span>${obj.bereidingstijd_minuten||obj.totale_tijd_minuten?`<span>${ICONS.clock}${obj.totale_tijd_minuten||obj.bereidingstijd_minuten} min</span>`:''}</div>
-        ${hoofdstukken.length ? `
+        ${hoofdstukken.length && isEigen(kb) ? `
         <select class="field-select" data-kb-item-hoofdstuk="${type}:${id}" style="font-size:12px; height:28px; margin-top:4px;" onclick="event.stopPropagation()">
           <option value="">Geen hoofdstuk (Overig)</option>
           ${hoofdstukken.map(h => `<option value="${esc(h.id)}" ${huidigHoofdstukId===h.id?'selected':''}>${esc(h.naam)}</option>`).join("")}
@@ -4678,7 +4786,7 @@ window.ICONS = {
   }
 
   function renderAddToKookboekModal(item, itemType){
-    const kbs = state.kookboeken.slice().sort((a,b) => (a.naam||"").localeCompare(b.naam||""));
+    const kbs = state.kookboeken.filter(isEigen).sort((a,b) => (a.naam||"").localeCompare(b.naam||""));
     return `
     <div class="modal-scrim open" id="add-to-kookboek-scrim">
       <div class="modal" style="max-width:440px;">
@@ -5160,7 +5268,7 @@ window.ICONS = {
   }
 
   function renderNaslagwerkenOverzicht(){
-    const nws = state.naslagwerken.slice().sort((a,b) => (a.naam||"").localeCompare(b.naam||""));
+    const nws = state.naslagwerken.filter(isEigen).sort((a,b) => (a.naam||"").localeCompare(b.naam||""));
     return `
     <div class="layout" style="grid-template-columns:1fr; max-width:1180px;">
       <div>
@@ -5181,10 +5289,11 @@ window.ICONS = {
                 <div class="card-body">
                   <div class="card-title">${esc(nw.naam)}</div>${ratingBadge("naslagwerk", nw.id)}
                   <div class="card-desc">${esc(nw.beschrijving||"")}</div>
-                  <div class="card-meta"><span>${getNaslagwerkItems(nw).length} techniek${getNaslagwerkItems(nw).length===1?'':'en'}</span></div>
+                  <div class="card-meta"><span>${getNaslagwerkItems(nw).length} techniek${getNaslagwerkItems(nw).length===1?'':'en'}</span><span>${zichtbaarheidLabel(nw)}</span></div>
                 </div>
               </div>`).join("")}
           </div>`}
+        ${renderGedeeldBlok(state.naslagwerken, "naslagwerken", "data-open-naslagwerk", "📚")}
       </div>
     </div>`;
   }
@@ -5234,31 +5343,35 @@ window.ICONS = {
       <div>
         <h1 style="font-family:var(--font-display); font-size:28px; margin-bottom:6px;">${esc(nw.naam)}</h1>
         ${nw.beschrijving ? `<p style="color:var(--ink-soft); font-size:14.5px;">${esc(nw.beschrijving)}</p>` : ''}
+        ${renderCollectieActies(nw, "naslagwerken")}
         ${renderRatingBlock('naslagwerk', nw.id)}
       </div>
-      <div style="display:flex; gap:8px; flex-shrink:0;">
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${isEigen(nw) ? `
+        <button class="btn btn-sm" data-delen="naslagwerken|${esc(nw.id)}">👥 Delen · ${esc(zichtbaarheidLabel(nw))}</button>
         <button class="btn btn-sm" id="manage-nw-hoofdstukken-btn">📑 Hoofdstukken</button>
         <button class="btn btn-sm" id="rename-naslagwerk-btn">${ICONS.edit} Naam/beschrijving</button>
-        <button class="btn btn-sm btn-danger" id="delete-naslagwerk-btn">${ICONS.trash} Verwijderen</button>
+        <button class="btn btn-sm btn-danger" id="delete-naslagwerk-btn">${ICONS.trash} Verwijderen</button>` : `
+        <button class="btn btn-sm" data-verberg="naslagwerken|${esc(nw.id)}">${isVerborgen("naslagwerken", nw.id) ? "Weer tonen" : "Verbergen voor mij"}</button>`}
       </div>
     </div>
 
-    <div class="field-row" style="max-width:480px; margin-bottom:24px;">
+    ${isEigen(nw) ? `<div class="field-row" style="max-width:480px; margin-bottom:24px;">
       <label class="field-label">Toevoegen aan dit naslagwerk</label>
       <input class="field-input" id="nw-techniek-search" placeholder="Typ om een techniek te zoeken..." autocomplete="off" value="${esc(state.naslagwerkTechniekSearch||'')}">
       <div id="nw-techniek-search-results" style="max-height:260px; overflow-y:auto; margin-top:6px; border:1px solid var(--line); border-radius:var(--radius-sm); ${state.naslagwerkTechniekSearch ? '' : 'display:none;'}">
         ${renderNaslagwerkTechniekSearchResults(nw)}
       </div>
-    </div>
+    </div>` : ""}
 
     ${items.length === 0 ? `
       <div class="empty-state">
         <div class="icon">📚</div>
         <h3>Nog niets in dit naslagwerk</h3>
-        <p>Kies hierboven een techniek of stuk documentatie om toe te voegen.</p>
+        <p>${isEigen(nw) ? "Kies hierboven een techniek of stuk documentatie om toe te voegen." : "De eigenaar heeft hier nog niets aan toegevoegd."}</p>
       </div>` : renderNaslagwerkItemsGrouped(nw)}
-    ` + (state.naslagwerkRenameOpen ? renderRenameNaslagwerkModal(nw) : '')
-      + (state.naslagwerkHoofdstukkenBeheerOpen ? renderNwHoofdstukkenBeheerModal(nw) : '');
+    ` + (isEigen(nw) && state.naslagwerkRenameOpen ? renderRenameNaslagwerkModal(nw) : '')
+      + (isEigen(nw) && state.naslagwerkHoofdstukkenBeheerOpen ? renderNwHoofdstukkenBeheerModal(nw) : '');
   }
 
   function renderNaslagwerkItemCard(t, nw){
@@ -5267,14 +5380,14 @@ window.ICONS = {
     return `
     <div class="card" data-open-naslagwerk-item="${t.id}">
       <div class="card-media">
-        <button class="remove-row-btn" data-remove-from-naslagwerk="${t.id}" style="position:absolute; top:8px; right:8px; background:var(--paper); border-radius:50%;" title="Verwijder uit naslagwerk">${ICONS.x}</button>
+        ${isEigen(nw) ? `<button class="remove-row-btn" data-remove-from-naslagwerk="${t.id}" style="position:absolute; top:8px; right:8px; background:var(--paper); border-radius:50%;" title="Verwijder uit naslagwerk">${ICONS.x}</button>` : ""}
         <span class="emoji">📄</span>
       </div>
       <div class="card-body">
         <div class="card-title">${esc(t.titel)}</div>
         <div class="card-desc">${esc(t.samenvatting||"")}</div>
         <div class="card-meta"><span>${esc(t.categorie||'Techniek')}</span></div>
-        ${hoofdstukken.length ? `
+        ${hoofdstukken.length && isEigen(nw) ? `
         <select class="field-select" data-nw-item-hoofdstuk="${t.id}" style="font-size:12px; height:28px; margin-top:4px;" onclick="event.stopPropagation()">
           <option value="">Geen hoofdstuk (Overig)</option>
           ${hoofdstukken.map(h => `<option value="${esc(h.id)}" ${huidigHoofdstukId===h.id?'selected':''}>${esc(h.naam)}</option>`).join("")}
