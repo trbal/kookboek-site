@@ -329,6 +329,14 @@ button { cursor: pointer; }
   position: relative;
 }
 .card-media .emoji { font-size: 40px; opacity: 0.55; }
+.card-media .card-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.card-media .card-fav { z-index: 2; }
+.foto-strip { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 12px; align-items: center; }
+.foto-thumb { position: relative; width: 96px; height: 96px; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--cream-dim); cursor: zoom-in; padding: 0; }
+.foto-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.foto-del { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer; line-height: 1; padding: 0; }
+.foto-lightbox { position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,.85); display: flex; align-items: center; justify-content: center; padding: 16px; cursor: zoom-out; }
+.foto-lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; }
 .card-fav {
   position: absolute;
   top: 10px;
@@ -850,6 +858,7 @@ window.ICONS = {
   let state = {
     favorieten: new Set(),
     verbergingen: new Set(),
+    fotos: [], fotoUrls: {},
     toonVerborgen: false,
     ratings: [], itemNotes: [], profielMap: {}, ratingOpen: null, noteEditId: null, noteDrafts: {},
     activeTab: "eten", // eten | drinken | puur | menus | voorraad | planning | basis | kookboeken
@@ -1408,9 +1417,92 @@ window.ICONS = {
   function initSocialHandlers(){
     if (window._socialInit) return; window._socialInit = true;
     const app = document.getElementById("app");
+    app.addEventListener("click", (e) => { if (e.target.closest("[data-foto-add],[data-foto-del],[data-foto-open]")) fotoAction(e); });
+    app.addEventListener("change", (e) => { if (e.target.matches && e.target.matches("[data-foto-input]")) fotoUploaden(e.target); });
     app.addEventListener("click", (e) => { if (e.target.closest("[data-delen],[data-verberg],[data-toon-verborgen]")) collectieAction(e); });
     app.addEventListener("click", (e) => { if (e.target.closest("[data-rate],[data-rate-who],[data-note-add],[data-note-del],[data-note-edit],[data-note-cancel],[data-note-save]")) socialAction(e); });
     app.addEventListener("input", (e) => { const k = e.target.getAttribute && e.target.getAttribute("data-note-draft"); if (k) state.noteDrafts[k] = e.target.value; });
+  }
+
+  // ---------- Foto's (Fase 5) ----------
+  const FOTO_MAX = 5;
+  async function loadFotos(){
+    const { data, error } = await sb.from("item_fotos").select("id,item_type,item_id,pad,volgorde,user_id").order("volgorde").range(0, 9999);
+    if (error) throw new Error("'item_fotos': " + error.message);
+    state.fotos = data || [];
+    const paden = state.fotos.map(f => f.pad);
+    state.fotoUrls = {};
+    if (paden.length){
+      const r = await sb.storage.from("fotos").createSignedUrls(paden, 21600);
+      if (!r.error) (r.data || []).forEach(o => { if (o.signedUrl) state.fotoUrls[o.path] = o.signedUrl; });
+    }
+  }
+  const fotosVan = (type, id) => state.fotos.filter(f => f.item_type === type && f.item_id === id);
+  function fotoCover(type, id){ const f = fotosVan(type, id)[0]; return f ? (state.fotoUrls[f.pad] || null) : null; }
+  function cardMedia(type, id, emoji){
+    const u = fotoCover(type, id);
+    return u ? `<img class="card-img" src="${esc(u)}" alt="" loading="lazy">` : `<span class="emoji">${emoji}</span>`;
+  }
+  function renderFotoBlock(type, id){
+    const lijst = fotosVan(type, id), me = myUid(), admin = state.role === "admin";
+    const thumbs = lijst.map(f => {
+      const u = state.fotoUrls[f.pad]; if (!u) return "";
+      const kan = f.user_id === me || admin;
+      return `<div class="foto-thumb" data-foto-open="${esc(u)}" role="button" tabindex="0" aria-label="Foto vergroten"><img src="${esc(u)}" alt="" loading="lazy">${kan ? `<button class="foto-del" data-foto-del="${esc(f.id)}" aria-label="Foto verwijderen" title="Foto verwijderen">×</button>` : ""}</div>`;
+    }).join("");
+    const mag = canWrite() && lijst.length < FOTO_MAX;
+    if (!thumbs && !mag) return "";
+    return `<div class="foto-strip">${thumbs}${mag ? `<button class="btn btn-sm" data-foto-add>📷 Foto toevoegen</button><input type="file" accept="image/*" data-foto-input data-ftype="${esc(type)}" data-fid="${esc(id)}" style="display:none;">` : ""}</div>`;
+  }
+  async function verkleinFoto(file){
+    const bmp = await createImageBitmap(file);
+    const schaal = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * schaal); c.height = Math.round(bmp.height * schaal);
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    return await new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error("Foto omzetten mislukt")), "image/jpeg", 0.82));
+  }
+  async function fotoUploaden(input){
+    const file = input.files && input.files[0]; if (!file) return;
+    const type = input.getAttribute("data-ftype"), id = input.getAttribute("data-fid");
+    if (fotosVan(type, id).length >= FOTO_MAX){ showToast("Maximaal " + FOTO_MAX + " foto's per item"); return; }
+    showToast("Foto uploaden...");
+    try {
+      const blob = await verkleinFoto(file);
+      const pad = type + "/" + crypto.randomUUID() + ".jpg";
+      const up = await sb.storage.from("fotos").upload(pad, blob, { contentType: "image/jpeg" });
+      if (up.error) throw new Error(up.error.message);
+      const volgorde = fotosVan(type, id).reduce((m, f) => Math.max(m, f.volgorde), -1) + 1;
+      const ins = await sb.from("item_fotos").insert({ item_type: type, item_id: id, pad, volgorde, user_id: myUid() }).select("id,item_type,item_id,pad,volgorde,user_id").single();
+      if (ins.error){ await sb.storage.from("fotos").remove([pad]); throw new Error(ins.error.message); }
+      state.fotos.push(ins.data);
+      const su = await sb.storage.from("fotos").createSignedUrl(pad, 21600);
+      if (su.data) state.fotoUrls[pad] = su.data.signedUrl;
+      showToast("Foto toegevoegd"); render();
+    } catch(err){ showToast("Foto uploaden mislukt: " + err.message); }
+    input.value = "";
+  }
+  async function fotoAction(e){
+    const t = e.target;
+    const del = t.closest("[data-foto-del]");
+    if (del){
+      e.stopPropagation();
+      const id = del.getAttribute("data-foto-del"), f = state.fotos.find(x => x.id === id); if (!f) return;
+      if (!(await confirmDialog("Deze foto verwijderen?", { confirmLabel: "Verwijderen" }))) return;
+      const rm = await sb.storage.from("fotos").remove([f.pad]);
+      if (rm.error){ showToast("Verwijderen mislukt: " + rm.error.message); return; }
+      const { error } = await sb.from("item_fotos").delete().eq("id", id);
+      if (error){ showToast("Verwijderen mislukt: " + error.message); return; }
+      state.fotos = state.fotos.filter(x => x.id !== id); delete state.fotoUrls[f.pad]; render(); return;
+    }
+    const add = t.closest("[data-foto-add]");
+    if (add){ const inp = add.parentNode.querySelector("[data-foto-input]"); if (inp) inp.click(); return; }
+    const open = t.closest("[data-foto-open]");
+    if (open){
+      const lb = document.createElement("div"); lb.className = "foto-lightbox";
+      lb.innerHTML = `<img src="${esc(open.getAttribute("data-foto-open"))}" alt="">`;
+      lb.addEventListener("click", () => lb.remove()); document.body.appendChild(lb);
+    }
   }
 
   async function toggleFavoriet(table, item){
@@ -1437,6 +1529,7 @@ window.ICONS = {
       await loadFavorieten();
       await loadVerbergingen();
       await loadSocial();
+      await loadFotos();
       await Promise.all(COLLECTIONS.map(async ([name, set]) => {
         cache[name] = await fetchCollection(name);
         set(cache[name]);
@@ -1457,6 +1550,7 @@ window.ICONS = {
       let changed = false;
       await loadFavorieten();
       await loadVerbergingen();
+      await loadFotos();
       const socBefore = JSON.stringify([state.ratings, state.itemNotes, state.profielMap]);
       await loadSocial();
       if (JSON.stringify([state.ratings, state.itemNotes, state.profielMap]) !== socBefore) changed = true;
@@ -1609,7 +1703,7 @@ window.ICONS = {
   }
   async function logout(){
     await sb.auth.signOut();
-    state.session = null; state.favorieten = new Set(); state.verbergingen = new Set(); state.toonVerborgen = false; state.ratings = []; state.itemNotes = []; state.profielMap = {}; rebuildSocialIndex(); state.role = null; state.naam = null; state.naamEdit = false; state.roleLoaded = false; state.started = false;
+    state.session = null; state.favorieten = new Set(); state.verbergingen = new Set(); state.toonVerborgen = false; state.fotos = []; state.fotoUrls = {}; state.ratings = []; state.itemNotes = []; state.profielMap = {}; rebuildSocialIndex(); state.role = null; state.naam = null; state.naamEdit = false; state.roleLoaded = false; state.started = false;
     Object.keys(cache).forEach(k => delete cache[k]);
     render();
   }
@@ -2018,7 +2112,7 @@ window.ICONS = {
     <div class="card" data-open-drink="${d.id}">
       <div class="card-media">
         <button class="card-fav ${isFav?'is-fav':''}" data-drink-fav="${d.id}" aria-label="Favoriet">${isFav ? ICONS.heart : ICONS.heartOutline}</button>
-        <span class="emoji">🍸</span>
+        ${cardMedia("drank", d.id, "🍸")}
       </div>
       <div class="card-body">
         <div class="card-title">${esc(d.naam)}</div>${ratingBadge("drank", d.id)}
@@ -2092,6 +2186,7 @@ window.ICONS = {
       <div class="detail-hero">
         <h1 class="detail-title">${esc(d.naam)}</h1>
         <p class="detail-desc">${esc(d.beschrijving||"")}</p>
+        ${renderFotoBlock('drank', d.id)}
         ${renderRatingBlock('drank', d.id)}
         <div class="detail-meta-row">
           <span>${ICONS.clock} ${d.bereidingstijd_minuten||0} min</span>
@@ -3051,7 +3146,7 @@ window.ICONS = {
     <div class="card" data-open="${r.id}">
       <div class="card-media">
         <button class="card-fav ${isFav?'is-fav':''}" data-fav="${r.id}" aria-label="Favoriet">${isFav ? ICONS.heart : ICONS.heartOutline}</button>
-        <span class="emoji">${r._emoji || "🍽️"}</span>
+        ${cardMedia("recept", r.id, r._emoji || "🍽️")}
       </div>
       <div class="card-body">
         <div class="card-title">${esc(r.titel)}</div>${ratingBadge("recept", r.id)}
@@ -3078,6 +3173,7 @@ window.ICONS = {
       <div class="detail-hero">
         <h1 class="detail-title">${esc(r.titel)}</h1>
         <p class="detail-desc">${esc(r.beschrijving||"")}</p>
+        ${renderFotoBlock('recept', r.id)}
         ${renderRatingBlock('recept', r.id)}
         <div class="detail-meta-row">
           <span>${ICONS.clock} ${r.bereidingstijd_minuten||0} min bereiding${r.wachttijd_minuten?` + ${r.wachttijd_minuten} min wachttijd`:''}</span>
@@ -3430,7 +3526,7 @@ window.ICONS = {
     <div class="card" data-open-basis="${item.id}">
       <div class="card-media">
         <button class="card-fav ${isFav?'is-fav':''}" data-basis-fav="${item.id}" aria-label="Favoriet">${isFav ? ICONS.heart : ICONS.heartOutline}</button>
-        <span class="emoji">${basisSubTabEmoji(state.basisSubTab)}</span>
+        ${cardMedia(basisTypeOf(), item.id, basisSubTabEmoji(state.basisSubTab))}
       </div>
       <div class="card-body">
         <div class="card-title">${esc(item.naam)}</div>${ratingBadge(basisTypeOf(), item.id)}
@@ -3537,6 +3633,7 @@ window.ICONS = {
       <div class="detail-hero">
         <h1 class="detail-title">${esc(item.naam)}</h1>
         <p class="detail-desc">${esc(item.beschrijving||"")}</p>
+        ${renderFotoBlock(basisTypeOf(), item.id)}
         ${renderRatingBlock(basisTypeOf(), item.id)}
         <div class="detail-meta-row">
           <span>${ICONS.clock} ${item.bereidingstijd_minuten||0} min</span>
@@ -3886,7 +3983,7 @@ window.ICONS = {
     <div class="card" data-open-puur="${x.id}">
       <div class="card-media">
         <button class="card-fav ${isFav?'is-fav':''}" data-puur-fav="${x.id}" aria-label="Favoriet">${isFav ? ICONS.heart : ICONS.heartOutline}</button>
-        <span class="emoji">${PUUR_EMOJI[x.categorie]||'🍶'}</span>
+        ${cardMedia("puur", x.id, PUUR_EMOJI[x.categorie]||'🍶')}
       </div>
       <div class="card-body">
         <div class="card-title">${esc(x.naam)}</div>${ratingBadge("puur", x.id)}
@@ -4068,6 +4165,7 @@ window.ICONS = {
       <div class="detail-hero">
         <h1 class="detail-title">${esc(x.naam)}</h1>
         <p class="detail-desc">${esc(x.beschrijving||"")}</p>
+        ${renderFotoBlock('puur', x.id)}
         ${renderRatingBlock('puur', x.id)}
         <div class="detail-meta-row">
           <span>${esc(x.categorie||'')}</span>
