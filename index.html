@@ -1188,7 +1188,7 @@ window.ICONS = {
       ${verborgen ? `<button class="btn btn-sm btn-ghost" data-toon-verborgen style="margin-bottom:10px;">${state.toonVerborgen ? "Verborgen collecties weer verbergen" : "Verborgen tonen (" + verborgen + ")"}</button>` : ""}
       ${zichtbaar.length ? `<div class="grid">${zichtbaar.map(c => `
         <div class="card" ${openAttr}="${esc(c.id)}" style="${isVerborgen(tabel, c.id) ? "opacity:.6;" : ""}">
-          <div class="card-media"><span class="emoji">${emoji}</span></div>
+          <div class="card-media">${cardMedia(tabel === "kookboeken" ? "kookboek" : "naslagwerk", c.id, emoji)}</div>
           <div class="card-body">
             <div class="card-title">${esc(c.naam)}</div>${ratingBadge(tabel === "kookboeken" ? "kookboek" : "naslagwerk", c.id)}
             <div class="card-desc">${esc(c.beschrijving||"")}</div>
@@ -1426,6 +1426,7 @@ window.ICONS = {
 
   // ---------- Foto's (Fase 5) ----------
   const FOTO_MAX = 5;
+  const fotoMax = (type) => (type === "kookboek" || type === "naslagwerk") ? 1 : FOTO_MAX;
   async function loadFotos(){
     const { data, error } = await sb.from("item_fotos").select("id,item_type,item_id,pad,volgorde,user_id").order("volgorde").range(0, 9999);
     if (error) throw new Error("'item_fotos': " + error.message);
@@ -1450,9 +1451,11 @@ window.ICONS = {
       const kan = f.user_id === me || admin;
       return `<div class="foto-thumb" data-foto-open="${esc(u)}" role="button" tabindex="0" aria-label="Foto vergroten"><img src="${esc(u)}" alt="" loading="lazy">${kan ? `<button class="foto-del" data-foto-del="${esc(f.id)}" aria-label="Foto verwijderen" title="Foto verwijderen">×</button>` : ""}</div>`;
     }).join("");
-    const mag = canWrite() && lijst.length < FOTO_MAX;
+    const isCol = type === "kookboek" || type === "naslagwerk";
+    const colObj = isCol ? (cache[type === "kookboek" ? "kookboeken" : "naslagwerken"] || []).find(x => x.id === id) : null;
+    const mag = canWrite() && lijst.length < fotoMax(type) && (!isCol || (colObj && isEigen(colObj)) || admin);
     if (!thumbs && !mag) return "";
-    return `<div class="foto-strip">${thumbs}${mag ? `<button class="btn btn-sm" data-foto-add>📷 Foto toevoegen</button><input type="file" accept="image/*" data-foto-input data-ftype="${esc(type)}" data-fid="${esc(id)}" style="display:none;">` : ""}</div>`;
+    return `<div class="foto-strip">${thumbs}${mag ? `<button class="btn btn-sm" data-foto-add>📷 ${isCol ? "Coverfoto toevoegen" : "Foto toevoegen"}</button><input type="file" accept="image/*" data-foto-input data-ftype="${esc(type)}" data-fid="${esc(id)}" style="display:none;">` : ""}</div>`;
   }
   async function verkleinFoto(file){
     const bmp = await createImageBitmap(file);
@@ -1465,7 +1468,7 @@ window.ICONS = {
   async function fotoUploaden(input){
     const file = input.files && input.files[0]; if (!file) return;
     const type = input.getAttribute("data-ftype"), id = input.getAttribute("data-fid");
-    if (fotosVan(type, id).length >= FOTO_MAX){ showToast("Maximaal " + FOTO_MAX + " foto's per item"); return; }
+    if (fotosVan(type, id).length >= fotoMax(type)){ showToast("Maximaal " + fotoMax(type) + " foto" + (fotoMax(type) === 1 ? "" : "'s") + " per item"); return; }
     showToast("Foto uploaden...");
     try {
       const blob = await verkleinFoto(file);
@@ -4757,7 +4760,7 @@ window.ICONS = {
           <div class="grid">
             ${kbs.map(kb => `
               <div class="card" data-open-kookboek="${kb.id}">
-                <div class="card-media"><span class="emoji">📖</span></div>
+                <div class="card-media">${cardMedia('kookboek', kb.id, '📖')}</div>
                 <div class="card-body">
                   <div class="card-title">${esc(kb.naam)}</div>${ratingBadge("kookboek", kb.id)}
                   <div class="card-desc">${esc(kb.beschrijving||"")}</div>
@@ -4825,6 +4828,7 @@ window.ICONS = {
         <h1 style="font-family:var(--font-display); font-size:28px; margin-bottom:6px;">${esc(kb.naam)}</h1>
         ${kb.beschrijving ? `<p style="color:var(--ink-soft); font-size:14.5px;">${esc(kb.beschrijving)}</p>` : ''}
         ${renderCollectieActies(kb, "kookboeken")}
+        ${renderFotoBlock('kookboek', kb.id)}
         ${renderRatingBlock('kookboek', kb.id)}
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -5424,7 +5428,7 @@ window.ICONS = {
           <div class="grid">
             ${nws.map(nw => `
               <div class="card" data-open-naslagwerk="${nw.id}">
-                <div class="card-media"><span class="emoji">📚</span></div>
+                <div class="card-media">${cardMedia('naslagwerk', nw.id, '📚')}</div>
                 <div class="card-body">
                   <div class="card-title">${esc(nw.naam)}</div>${ratingBadge("naslagwerk", nw.id)}
                   <div class="card-desc">${esc(nw.beschrijving||"")}</div>
@@ -5483,6 +5487,7 @@ window.ICONS = {
         <h1 style="font-family:var(--font-display); font-size:28px; margin-bottom:6px;">${esc(nw.naam)}</h1>
         ${nw.beschrijving ? `<p style="color:var(--ink-soft); font-size:14.5px;">${esc(nw.beschrijving)}</p>` : ''}
         ${renderCollectieActies(nw, "naslagwerken")}
+        ${renderFotoBlock('naslagwerk', nw.id)}
         ${renderRatingBlock('naslagwerk', nw.id)}
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
