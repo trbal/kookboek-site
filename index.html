@@ -5262,7 +5262,7 @@ window.ICONS = {
   function renderTechniekCard(t){
     return `
     <div class="card" data-open-techniek="${t.id}">
-      <div class="card-media"><span class="emoji">📚</span></div>
+      <div class="card-media">${cardMedia('techniek', t.id, '📚')}</div>
       <div class="card-body">
         <div class="card-title">${esc(t.titel)}</div>${ratingBadge("techniek", t.id)}
         <div class="card-desc">${esc(t.samenvatting||"")}</div>
@@ -5279,6 +5279,7 @@ window.ICONS = {
       <div class="detail-hero">
         <h1 class="detail-title">${esc(t.titel)}</h1>
         ${t.samenvatting ? `<p class="detail-desc">${esc(t.samenvatting)}</p>` : ''}
+        ${renderFotoBlock('techniek', t.id)}
         <div class="detail-meta-row">${t.categorie?`<span>${esc(t.categorie)}</span>`:''}</div>
         <div class="detail-tags">${asTagArray(t.stijl_tags).map(tag=>`<span class="tag">${esc(displayTag(tag))}</span>`).join("")}</div>
         ${renderBronBadge(t.bron)}
