@@ -822,6 +822,7 @@ window.ICONS = {
   const TECHNIEK_CATEGORIEEN = ["Snijtechniek","Bereidingstechniek","Ingrediëntkennis","Keukenchemie/theorie","Materiaal & gereedschap","Conservering","Overig"];
 
   let state = {
+    favorieten: new Set(),
     activeTab: "eten", // eten | drinken | puur | menus | voorraad | planning | basis | kookboeken
     activeKookboekId: null,
     kookboekRenameOpen: false,
@@ -1099,6 +1100,7 @@ window.ICONS = {
       if (row[c] === undefined || (row[c] === null && c in COL_DEFAULTS)) row[c] = (c in COL_DEFAULTS) ? COL_DEFAULTS[c] : null;
     });
     row.extra = extra;
+    delete row.favoriet; // favorieten zijn per gebruiker (tabel favorieten), nooit op het item zelf
     return row;
   }
 
@@ -1131,13 +1133,43 @@ window.ICONS = {
       data.forEach(r => out.push(fromRow(r)));
       if (data.length < PAGE) break;
     }
+    const ft = FAV_TYPES[table];
+    if (ft) out.forEach(d => { d.favoriet = state.favorieten.has(ft + ":" + d.id); });
     return out;
+  }
+
+  // ---------- Favorieten (per gebruiker) ----------
+  const FAV_TYPES = { recepten: "recept", dranken: "drank", puur: "puur", kruidenmixen: "kruidenmix", sauzen: "saus", dessertbasis: "dessertbasis" };
+  async function loadFavorieten(){
+    const uid = state.session && state.session.user && state.session.user.id;
+    const set = new Set();
+    const { data, error } = await sb.from("favorieten").select("item_type,item_id").eq("user_id", uid).range(0, 9999);
+    if (error) throw new Error("'favorieten': " + error.message);
+    (data || []).forEach(r => set.add(r.item_type + ":" + r.item_id));
+    state.favorieten = set;
+  }
+  async function toggleFavoriet(table, item){
+    const ft = FAV_TYPES[table], uid = state.session.user.id;
+    if (!ft || !item) return;
+    const nieuw = !item.favoriet, key = ft + ":" + item.id;
+    item.favoriet = nieuw;
+    if (nieuw) state.favorieten.add(key); else state.favorieten.delete(key);
+    const res = nieuw
+      ? await sb.from("favorieten").insert({ user_id: uid, item_type: ft, item_id: item.id })
+      : await sb.from("favorieten").delete().eq("user_id", uid).eq("item_type", ft).eq("item_id", item.id);
+    if (res.error){
+      item.favoriet = !nieuw;
+      if (nieuw) state.favorieten.delete(key); else state.favorieten.add(key);
+      showToast("Favoriet opslaan mislukt: " + res.error.message);
+    }
+    render();
   }
 
   let lastLoad = 0;
   async function loadAll(){
     state.loading = true; state.loadError = null; render();
     try {
+      await loadFavorieten();
       await Promise.all(COLLECTIONS.map(async ([name, set]) => {
         cache[name] = await fetchCollection(name);
         set(cache[name]);
@@ -1156,6 +1188,7 @@ window.ICONS = {
     if (!state.session || !state.role || state.loading) return;
     try {
       let changed = false;
+      await loadFavorieten();
       for (const [name, set] of COLLECTIONS){
         const fresh = await fetchCollection(name);
         if (JSON.stringify(fresh) !== JSON.stringify(cache[name])){ cache[name] = fresh; set(fresh); changed = true; }
@@ -1294,7 +1327,7 @@ window.ICONS = {
   }
   async function logout(){
     await sb.auth.signOut();
-    state.session = null; state.role = null; state.naam = null; state.naamEdit = false; state.roleLoaded = false; state.started = false;
+    state.session = null; state.favorieten = new Set(); state.role = null; state.naam = null; state.naamEdit = false; state.roleLoaded = false; state.started = false;
     Object.keys(cache).forEach(k => delete cache[k]);
     render();
   }
@@ -2158,15 +2191,13 @@ window.ICONS = {
       e.stopPropagation();
       const id = el.getAttribute("data-drink-fav");
       const d = getDrink(id);
-      const bijgewerkt = Object.assign({}, d, { favoriet: !d.favoriet });
-      await saveDrink(bijgewerkt);
+      await toggleFavoriet("dranken", d);
       render();
     }));
     const detailDrinkFavBtn = $("#detail-drink-fav-btn");
     if (detailDrinkFavBtn) detailDrinkFavBtn.addEventListener("click", async () => {
       const d = getDrink(state.activeDrinkId);
-      const bijgewerkt = Object.assign({}, d, { favoriet: !d.favoriet });
-      await saveDrink(bijgewerkt);
+      await toggleFavoriet("dranken", d);
       render();
     });
     const printDrinkBtn = $("#print-drink-btn");
@@ -5421,8 +5452,7 @@ window.ICONS = {
       e.stopPropagation();
       const id = el.getAttribute("data-fav");
       const r = getRecipe(id);
-      const bijgewerkt = Object.assign({}, r, { favoriet: !r.favoriet });
-      await saveRecipe(bijgewerkt);
+      await toggleFavoriet("recepten", r);
       render();
     }));
 
@@ -5434,15 +5464,13 @@ window.ICONS = {
       e.stopPropagation();
       const id = el.getAttribute("data-puur-fav");
       const x = getPuur(id);
-      const bijgewerkt = Object.assign({}, x, { favoriet: !x.favoriet });
-      await savePuur(bijgewerkt);
+      await toggleFavoriet("puur", x);
       render();
     }));
     const detailPuurFavBtn = $("#detail-puur-fav-btn");
     if (detailPuurFavBtn) detailPuurFavBtn.addEventListener("click", async () => {
       const x = getPuur(state.activePuurId);
-      const bijgewerkt = Object.assign({}, x, { favoriet: !x.favoriet });
-      await savePuur(bijgewerkt);
+      await toggleFavoriet("puur", x);
       render();
     });
     const printPuurBtn = $("#print-puur-btn");
@@ -5600,15 +5628,13 @@ window.ICONS = {
       e.stopPropagation();
       const id = el.getAttribute("data-basis-fav");
       const item = getBasisCollection().find(x => x.id === id);
-      const bijgewerkt = Object.assign({}, item, { favoriet: !item.favoriet });
-      await saveBasisItem(bijgewerkt);
+      await toggleFavoriet(state.basisSubTab, item);
       render();
     }));
     const detailBasisFavBtn = $("#detail-basis-fav-btn");
     if (detailBasisFavBtn) detailBasisFavBtn.addEventListener("click", async () => {
       const item = getActiveBasisItem();
-      const bijgewerkt = Object.assign({}, item, { favoriet: !item.favoriet });
-      await saveBasisItem(bijgewerkt);
+      await toggleFavoriet(state.basisSubTab, item);
       render();
     });
     const printBasisBtn = $("#print-basis-btn");
@@ -5824,8 +5850,7 @@ window.ICONS = {
     const detailFavBtn = $("#detail-fav-btn");
     if (detailFavBtn) detailFavBtn.addEventListener("click", async () => {
       const r = getRecipe(state.activeRecipeId);
-      const bijgewerkt = Object.assign({}, r, { favoriet: !r.favoriet });
-      await saveRecipe(bijgewerkt);
+      await toggleFavoriet("recepten", r);
       render();
     });
     const printRecipeBtn = $("#print-recipe-btn");
