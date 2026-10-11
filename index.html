@@ -1714,7 +1714,8 @@ window.ICONS = {
       const cFilter = state.beheerCollFilter || "alle";
       const cTelling = {}; colls.filter(c => !c.verwijderd_op).forEach(c => { cTelling[c.eigenaar_id] = (cTelling[c.eigenaar_id] || 0) + 1; });
       const cLijst = colls.filter(c => cFilter === "alle" ? true : cFilter === "verwijderd" ? !!c.verwijderd_op : c.eigenaar_id === cFilter);
-      const cNaam = (c) => (c.eigenaar_naam || "Onbekend") + (c.eigenaar_rol ? " (" + c.eigenaar_rol + ")" : "");
+      const gLabel = (u) => (u.weergavenaam || "Naamloos") + " (" + u.role + ") · " + u.email;
+      const cNaam = (c) => { const u = gebruikers.find(x => x.user_id === c.eigenaar_id); return u ? gLabel(u) : (c.eigenaar_naam || "Onbekend") + (c.eigenaar_rol ? " (" + c.eigenaar_rol + ")" : ""); };
       scrim.innerHTML = `
       <div class="modal" style="max-width:820px; max-height:90vh; overflow:auto;">
         <div style="padding:22px; display:flex; flex-direction:column; gap:18px;">
@@ -1747,7 +1748,7 @@ window.ICONS = {
             <select id="coll-filter" style="padding:6px 8px; border:1px solid var(--line-strong); border-radius:6px; font:inherit; margin-bottom:8px;">
               <option value="alle" ${cFilter==="alle"?"selected":""}>Alle</option>
               <option value="verwijderd" ${cFilter==="verwijderd"?"selected":""}>Verwijderd</option>
-              ${gebruikers.map(u => `<option value="${esc(u.user_id)}" ${cFilter===u.user_id?"selected":""}>Van ${esc(u.weergavenaam || u.email)}</option>`).join("")}
+              ${gebruikers.map(u => `<option value="${esc(u.user_id)}" ${cFilter===u.user_id?"selected":""}>Van ${esc(gLabel(u))}</option>`).join("")}
             </select>
             ${cLijst.length ? cLijst.map(c => `
               <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:8px 0; border-top:1px solid var(--line);${c.verwijderd_op ? " opacity:.7;" : ""}">
@@ -1755,7 +1756,7 @@ window.ICONS = {
                   <div style="font-size:12px; color:var(--ink-soft);">${esc(cNaam(c))} · ${c.zichtbaarheid === "iedereen" ? "met iedereen" : c.zichtbaarheid === "gedeeld" ? "met personen" : "privé"} · ${c.aantal_items} item${c.aantal_items === 1 ? "" : "s"}${c.verwijderd_op ? " · verwijderd op " + esc(fmt(c.verwijderd_op)) : ""}</div></div>
                 ${c.verwijderd_op ? `<button class="btn btn-sm" data-coll-act="herstel" data-tabel="${esc(c.tabel)}" data-cid="${esc(c.id)}">Herstellen</button>` : ""}
                 <select data-coll-owner="${esc(c.tabel)}|${esc(c.id)}" style="padding:6px 8px; border:1px solid var(--line-strong); border-radius:6px; font:inherit;">
-                  ${gebruikers.map(u => `<option value="${esc(u.user_id)}" ${u.user_id===c.eigenaar_id?"selected":""}>${esc(u.weergavenaam || u.email)}</option>`).join("")}
+                  ${gebruikers.map(u => `<option value="${esc(u.user_id)}" ${u.user_id===c.eigenaar_id?"selected":""}>${esc(gLabel(u))}</option>`).join("")}
                 </select>
                 <button class="btn btn-sm" data-coll-act="overdraag" data-tabel="${esc(c.tabel)}" data-cid="${esc(c.id)}">Eigenaar wijzigen</button>
               </div>`).join("") : `<div style="font-size:13.5px; color:var(--ink-soft);">Geen collecties.</div>`}
