@@ -1465,6 +1465,15 @@ window.ICONS = {
     c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
     return await new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error("Foto omzetten mislukt")), "image/jpeg", 0.82));
   }
+  async function verwijderFotosVan(type, id){
+    try {
+      const lijst = fotosVan(type, id); if (!lijst.length) return;
+      const rm = await sb.storage.from("fotos").remove(lijst.map(f => f.pad));
+      if (rm.error) return;
+      await sb.from("item_fotos").delete().eq("item_type", type).eq("item_id", id);
+      state.fotos = state.fotos.filter(f => !(f.item_type === type && f.item_id === id));
+    } catch(e){ /* wezen worden later via Beheer opgeruimd */ }
+  }
   async function fotoUploaden(input){
     const file = input.files && input.files[0]; if (!file) return;
     const type = input.getAttribute("data-ftype"), id = input.getAttribute("data-fid");
@@ -1596,6 +1605,8 @@ window.ICONS = {
       const { error, count } = await sb.from(collectionName).delete({ count: "exact" }).eq("id", id);
       if (error) throw new Error(error.message);
       if (count === 0) throw new Error("Niet verwijderd (geen rechten, of bestond al niet meer)");
+      if (FAV_TYPES[collectionName]) await verwijderFotosVan(FAV_TYPES[collectionName], id);
+      else if (collectionName === "technieken") await verwijderFotosVan("techniek", id);
     }
     cache[collectionName] = (cache[collectionName] || []).filter(x => x.id !== id);
     setterFor(collectionName)(cache[collectionName].slice());
@@ -1858,9 +1869,34 @@ window.ICONS = {
                 <button class="btn btn-sm" data-coll-act="overdraag" data-tabel="${esc(c.tabel)}" data-cid="${esc(c.id)}">Eigenaar wijzigen</button>
               </div>`).join("") : `<div style="font-size:13.5px; color:var(--ink-soft);">Geen collecties.</div>`}
           </section>
+          <section>
+            <h3 style="margin:0 0 8px; font-size:15px;">Foto's opruimen</h3>
+            <div id="wezen-uit" style="font-size:13.5px; color:var(--ink-soft); margin-bottom:8px;">Zoekt foto's van verwijderde items en losse bestanden.</div>
+            <button class="btn btn-sm" id="wezen-zoek">Zoeken</button> <button class="btn btn-sm btn-danger" id="wezen-wis" style="display:none;">Opruimen</button>
+          </section>
         </div>
       </div>`;
       scrim.querySelector("#beheer-close").addEventListener("click", close);
+      let wezen = [];
+      const wUit = scrim.querySelector("#wezen-uit"), wWis = scrim.querySelector("#wezen-wis");
+      scrim.querySelector("#wezen-zoek").addEventListener("click", async () => {
+        const r = await sb.rpc("admin_foto_wezen");
+        if (r.error){ wUit.textContent = beheerFout(r.error); return; }
+        wezen = r.data || [];
+        const nr = wezen.filter(w => w.soort === "rij").length, nb = wezen.length - nr;
+        wUit.textContent = wezen.length ? nr + " foto" + (nr === 1 ? "" : "'s") + " van verwijderde items, " + nb + " los bestand" + (nb === 1 ? "" : "en") + "." : "Niets op te ruimen.";
+        wWis.style.display = wezen.length ? "" : "none";
+      });
+      wWis.addEventListener("click", async () => {
+        if (!wezen.length || !(await confirmDialog(wezen.length + " bestand" + (wezen.length === 1 ? "" : "en") + " definitief wissen?", { confirmLabel: "Wissen" }))) return;
+        const rm = await sb.storage.from("fotos").remove(wezen.map(w => w.pad));
+        if (rm.error){ wUit.textContent = "Wissen mislukt: " + rm.error.message; return; }
+        const ids = wezen.filter(w => w.id).map(w => w.id);
+        if (ids.length){ const d = await sb.from("item_fotos").delete().in("id", ids); if (d.error){ wUit.textContent = "Rijen wissen mislukt: " + d.error.message; return; } }
+        const n = wezen.length; wezen = [];
+        try { await loadFotos(); } catch(e){}
+        refresh(n + " opgeruimd");
+      });
       const selFor = (id) => scrim.querySelector('select[data-rol-for="' + id + '"]');
       scrim.querySelectorAll("[data-act]").forEach(btn => btn.addEventListener("click", async () => {
         const act = btn.getAttribute("data-act"), id = btn.getAttribute("data-id"), mail = btn.getAttribute("data-mail");
