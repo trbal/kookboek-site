@@ -23,11 +23,12 @@
   --clay-600: #A24F22;
   --ink: #2B2620;
   --ink-soft: #635B4E;
-  --ink-faint: #9A9284;
+  --ink-faint: #7A7264;
   --line: #E4DECF;
   --line-strong: #D2C9B4;
   --danger: #B4402E;
   --danger-bg: #F8E8E4;
+  --gold: #8A6210;
   --success: #4A6741;
   --success-bg: #EAF0E4;
   --radius-sm: 8px;
@@ -46,10 +47,12 @@
     --paper: #221E17;
     --ink: #EDE7DA;
     --ink-soft: #B8AF9E;
-    --ink-faint: #83796A;
+    --ink-faint: #A39A88;
+    --danger: #E0705E;
     --line: #34301F;
     --line-strong: #453F29;
     --danger-bg: #3A2420;
+    --gold: #E3B84F;
     --success-bg: #23301E;
   }
 }
@@ -61,11 +64,13 @@
   --paper: #221E17;
   --ink: #EDE7DA;
   --ink-soft: #B8AF9E;
-  --ink-faint: #83796A;
+  --ink-faint: #A39A88;
+  --danger: #E0705E;
   --line: #34301F;
   --line-strong: #453F29;
   --danger-bg: #3A2420;
   --success-bg: #23301E;
+  --gold: #E3B84F;
 }
 * { box-sizing: border-box; }
 html, body {
@@ -247,6 +252,7 @@ button { cursor: pointer; }
 .chip .count { font-size: 11px; opacity: 0.75; }
 .filter-list { display: flex; flex-direction: column; gap: 2px; }
 .filter-row {
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -595,6 +601,7 @@ button { cursor: pointer; }
 .version-revert:hover { text-decoration: underline; }
 
 .manual-edit-toggle {
+  background: transparent;
   font-size: 13px;
   color: var(--ink-soft);
   margin-top: 14px;
@@ -653,14 +660,14 @@ button { cursor: pointer; }
 
 .rating-block { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 0 4px; }
 .rating-stars { display:inline-flex; gap:2px; }
-.rating-stars .star { background:none; border:0; padding:0 1px; font-size:24px; line-height:1; cursor:pointer; color:var(--line-strong); }
-.rating-stars .star.on { color:#d9a21b; }
-.rating-stars .star:hover { color:#e8b93a; }
+.rating-stars .star { background:none; border:0; padding:0 1px; font-size:24px; line-height:1; cursor:pointer; color:var(--ink-faint); opacity:.55; }
+.rating-stars .star.on { color:#d9a21b; opacity:1; }
+.rating-stars .star:hover { color:#e8b93a; opacity:1; }
 .rating-avg { background:none; border:0; padding:2px 4px; font:inherit; font-size:13px; color:var(--ink-soft); cursor:pointer; text-decoration:underline dotted; }
-.rating-who { width:100%; font-size:13px; background:var(--bg-soft, #f3f1ea); border-radius:8px; padding:8px 12px; display:flex; flex-direction:column; gap:3px; }
-.rating-badge { display:inline-block; font-size:12.5px; color:#a37512; margin:2px 0 4px; }
+.rating-who { color:var(--ink); width:100%; font-size:13px; background:var(--cream-dim); border-radius:8px; padding:8px 12px; display:flex; flex-direction:column; gap:3px; }
+.rating-badge { display:inline-block; font-size:12.5px; color:var(--gold); margin:2px 0 4px; }
 .user-note { border-top:1px solid var(--line); padding:10px 0; font-size:14px; line-height:1.5; }
-.user-note .who { font-size:12px; color:var(--ink-faint); margin-bottom:2px; }
+.user-note .who { font-size:12px; color:var(--ink-soft); margin-bottom:2px; }
 .user-note .acts { margin-top:4px; display:flex; gap:8px; }
 .notes-composer { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
 .tab-row { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
@@ -743,6 +750,13 @@ button { cursor: pointer; }
 .confirm-actions { display: flex; gap: 10px; margin-top: 18px; justify-content: flex-end; }
 
 /* ---- Smartphone: bovenbalk en tabs passen op het scherm ---- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .filter-row.active { color: var(--ink); }
+  :root:not([data-theme="light"]) .card-fav { background: rgba(0,0,0,0.5); }
+  :root:not([data-theme="light"]) .tag { color: var(--olive-300); }
+  :root:not([data-theme="light"]) .ingredient-amt { color: var(--olive-300); }
+  :root:not([data-theme="light"]) .step-text b { color: var(--olive-300); }
+}
 @media (max-width: 880px) {
   html, body { overflow-x: hidden; }
   .topbar { position: static; }
@@ -1201,7 +1215,7 @@ window.ICONS = {
   function renderRatingBlock(type, id){
     const st = ratingStats(type, id), key = type + ":" + id, open = state.ratingOpen === key;
     const stars = [1,2,3,4,5].map(n => `<button class="star ${st.mine >= n ? "on" : ""}" data-rate="${n}" data-rtype="${type}" data-rid="${esc(id)}" aria-label="${n} ${n === 1 ? "ster" : "sterren"}" title="${st.mine === n ? "Klik om je beoordeling te verwijderen" : n + " van 5"}">★</button>`).join("");
-    const who = open ? `<div class="rating-who">${st.list.slice().sort((a, b) => b.rating - a.rating).map(r => `<div>${"★".repeat(r.rating)}<span style="color:var(--line-strong);">${"★".repeat(5 - r.rating)}</span> ${esc(persoonLabel(r.user_id))}</div>`).join("")}</div>` : "";
+    const who = open ? `<div class="rating-who">${st.list.slice().sort((a, b) => b.rating - a.rating).map(r => `<div>${"★".repeat(r.rating)}<span style="opacity:.35;">${"★".repeat(5 - r.rating)}</span> ${esc(persoonLabel(r.user_id))}</div>`).join("")}</div>` : "";
     return `<div class="rating-block"><span class="rating-stars" title="Jouw beoordeling">${stars}</span>${st.count
       ? `<button class="rating-avg" data-rate-who="${esc(key)}">Gemiddeld ${fmtAvg(st.avg)} · ${st.count} beoordeling${st.count === 1 ? "" : "en"}</button>`
       : `<span style="font-size:13px;color:var(--ink-faint);">Nog niet beoordeeld</span>`}${who}</div>`;
@@ -1393,7 +1407,7 @@ window.ICONS = {
         <input id="login-password" type="password" placeholder="Wachtwoord${aanvragen ? " (minstens 8 tekens)" : ""}" autocomplete="${aanvragen ? "new-password" : "current-password"}" required minlength="${aanvragen ? 8 : 1}" style="${INPUT_STYLE}">
         ${aanvragen ? `<input id="login-password2" type="password" placeholder="Herhaal wachtwoord" autocomplete="new-password" required style="${INPUT_STYLE}">` : ""}
         <div id="login-error" style="color:var(--danger); font-size:13px; min-height:18px;">${esc(state.loginError || "")}</div>
-        ${state.loginInfo ? `<div style="font-size:13px; line-height:1.45; background:var(--bg-soft, #f3f1ea); border-radius:8px; padding:10px 12px;">${esc(state.loginInfo)}</div>` : ""}
+        ${state.loginInfo ? `<div style="font-size:13px; line-height:1.45; background:var(--cream-dim); border-radius:8px; padding:10px 12px;">${esc(state.loginInfo)}</div>` : ""}
         <button class="btn btn-primary" type="submit" id="login-btn" style="justify-content:center;">${aanvragen ? "Account aanvragen" : "Inloggen"}</button>
         <button class="btn btn-sm" type="button" id="login-switch" style="justify-content:center;">${aanvragen ? "Ik heb al een account" : "Nog geen account? Aanvragen"}</button>
       </form>
@@ -1586,22 +1600,22 @@ window.ICONS = {
             <h2 style="margin:0; font-size:18px;">Beheer</h2>
             <button class="btn btn-sm" id="beheer-close">Sluiten</button>
           </div>
-          ${msg ? `<div style="font-size:13px; background:var(--bg-soft, #f3f1ea); border-radius:8px; padding:8px 12px;">${esc(msg)}</div>` : ""}
+          ${msg ? `<div style="font-size:13px; background:var(--cream-dim); border-radius:8px; padding:8px 12px;">${esc(msg)}</div>` : ""}
           <section>
             <h3 style="margin:0 0 8px; font-size:15px;">Aanvragen (${aanvragen.length})</h3>
             ${aanvragen.length ? aanvragen.map(r => `
               <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:8px 0; border-top:1px solid var(--line);">
-                <div style="flex:1; min-width:200px;"><b>${esc(r.weergavenaam || r.email)}</b>${r.weergavenaam ? ` <span style="font-size:13px;">${esc(r.email)}</span>` : ""}<div style="font-size:12px; color:var(--muted, #777);">aangevraagd op ${esc(fmt(r.aangemaakt_op))}</div></div>
+                <div style="flex:1; min-width:200px;"><b>${esc(r.weergavenaam || r.email)}</b>${r.weergavenaam ? ` <span style="font-size:13px;">${esc(r.email)}</span>` : ""}<div style="font-size:12px; color:var(--ink-soft);">aangevraagd op ${esc(fmt(r.aangemaakt_op))}</div></div>
                 ${rolSelect(r.user_id, "viewer")}
                 <button class="btn btn-sm btn-primary" data-act="approve" data-id="${esc(r.user_id)}">Goedkeuren</button>
                 <button class="btn btn-sm btn-danger" data-act="reject" data-id="${esc(r.user_id)}" data-mail="${esc(r.email)}">Weigeren</button>
-              </div>`).join("") : `<div style="font-size:13.5px; color:var(--muted, #777);">Geen openstaande aanvragen.</div>`}
+              </div>`).join("") : `<div style="font-size:13.5px; color:var(--ink-soft);">Geen openstaande aanvragen.</div>`}
           </section>
           <section>
             <h3 style="margin:0 0 8px; font-size:15px;">Gebruikers (${gebruikers.length})</h3>
             ${gebruikers.map(u => `
               <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:8px 0; border-top:1px solid var(--line);">
-                <div style="flex:1; min-width:200px;"><b>${esc(u.weergavenaam || u.email)}</b>${u.weergavenaam ? ` <span style="font-size:13px;">${esc(u.email)}</span>` : ""}${u.user_id === me ? " (jij)" : ""}<div style="font-size:12px; color:var(--muted, #777);">laatst ingelogd ${esc(fmt(u.laatst_ingelogd))}</div></div>
+                <div style="flex:1; min-width:200px;"><b>${esc(u.weergavenaam || u.email)}</b>${u.weergavenaam ? ` <span style="font-size:13px;">${esc(u.email)}</span>` : ""}${u.user_id === me ? " (jij)" : ""}<div style="font-size:12px; color:var(--ink-soft);">laatst ingelogd ${esc(fmt(u.laatst_ingelogd))}</div></div>
                 ${rolSelect(u.user_id, u.role, `data-current="${esc(u.role)}" ${u.user_id === me ? "disabled" : ""}`)}
                 <button class="btn btn-sm btn-danger" data-act="revoke" data-id="${esc(u.user_id)}" data-mail="${esc(u.email)}" ${u.user_id === me ? "disabled" : ""}>Toegang intrekken</button>
               </div>`).join("")}
